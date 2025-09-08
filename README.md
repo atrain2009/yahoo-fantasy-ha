@@ -59,3 +59,21 @@ Here's an example of what to add to your configuration.yaml:
   team_id: {team_id}
 ```
 Restart Home Assistant and you should be all set!
+
+# Sensor Data
+The entity created in Home Assistant includes many different attributes: the primary state is your team's score for the week, with attributes for both yours and your opponent's roster (with an is_starting attribute to designate players in your starting lineup).
+
+# Add your matchup to your Dashboard
+I also made a dashboard card that shows your matchup info (it shows your team and score vs your opponent with team logos, and starting lineup info with player headshots).
+1. Download yahoo_fantasy_card.js
+2. Add it to your /www/community directory
+3. In Home Assistant, go to Settings > Dashboards > click the 3 dots in the top right and click Resources
+4. Click "+ Add Resource"
+5. For the URL, type "/local/community/yahoo_fantasy_card.js". It should be detected as a JavaScript Module.
+6. Add the card to your Dashboard
+
+You can configure the card like this:
+```
+type: custom:yahoo-fantasy-matchup-card
+entity: sensor.yahoo_fantasy_matchup
+```
