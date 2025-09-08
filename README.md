@@ -36,5 +36,26 @@ You'll need to enter the credentials from your app into the yahoo_oauth_ha.py in
 7. Once you've verified, your oauth.json file should be generated at the path you entered in step 3.
 8. Move this oauth.json file to the path of your Home Assistant configuration.yaml file.
 
+# Adding the integration to Home Assistant
+1. Download the yahoo-fantasy directory and add it to your /custom_components directory.
+2. Restart Home Assistant
+
 # Configuration
-You'll need to add the platform sensor to your Home Assistant configuration.yaml file.
+You'll need to add the platform sensor to your Home Assistant sensors.yaml or configuration.yaml, depending on where you configure your sensors. 
+
+Within your configuration.yaml, you'll need to add the platform "yahoo_fantasy" following configuration keys:
+
+| YAML Name | Description | Valid Values |
+| --- | --- | --- |
+| game_id | The sport of the league you want to integrate | I've only tried nfl, but I'd imagine nhl or mlb could also work |
+| league_id | Yahoo's ID for your fantasy league | Go to your fantasy team's page through the Yahoo UI and note the URL: it should look something like "https://football.fantasysports.yahoo.com/f1/{league_id}/{team_id}" |
+| team_id | Yahoo's ID for your team within your fantasy league | Go to your fantasy team's page through the Yahoo UI and note the URL: it should look something like "https://football.fantasysports.yahoo.com/f1/{league_id}/{team_id}" |
+
+Here's an example of what to add to your configuration.yaml:
+```
+- platform: yahoo_fantasy
+  game_key: nfl
+  league_id: {league_id}
+  team_id: {team_id}
+```
+Restart Home Assistant and you should be all set!
