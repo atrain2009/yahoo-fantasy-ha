@@ -36,7 +36,7 @@ You'll need to enter the credentials from your app into the yahoo_oauth_ha.py in
 7. Once you've verified, your oauth.json file should be generated at the path you entered in step 3.
 8. Move this oauth.json file to the path of your Home Assistant configuration.yaml file.
 
-# Adding the integration to Home Assistant
+## Adding the integration to Home Assistant
 1. Download the yahoo-fantasy directory and add it to your /custom_components directory.
 2. Restart Home Assistant
 
