@@ -54,7 +54,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
       : '<div class="player-placeholder">👤</div>';
     
     const points = player.points_total || 0;
-    const pointsDisplay = typeof points === 'number' ? points.toFixed(1) : '0.0';
+    const pointsDisplay = typeof points === 'number' ? points.toFixed(2) : '0.0';
     const formattedName = this.formatPlayerName(player.name);
     
     return `
@@ -321,9 +321,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           text-align: center;
           color: var(--primary-text-color, #333);
           padding: 6px 4px;
-          border-radius: 4px;
           width: 100%;
-          background: var(--secondary-background-color, #f0f0f0);
         }
         .player-cell {
           min-height: 50px;
@@ -491,12 +489,19 @@ class YahooFantasyMatchupCard extends HTMLElement {
             font-size: 12px;
           }
           .lineup-row, .lineup-header {
-            grid-template-columns: 1fr 50px 1fr;
-            gap: 6px;
+            grid-template-columns: 1fr 36px 1fr;
+            gap: 4px;
             padding: 6px 2px;
           }
+          .position-cell {
+            font-size: 8px;
+            font-weight: 700;
+            padding: 3px 2px;
+            line-height: 1.1;
+          }
           .player {
-            max-width: 180px;
+            max-width: none;
+            gap: 6px;
           }
           .player-name {
             font-size: 10px;
@@ -506,14 +511,20 @@ class YahooFantasyMatchupCard extends HTMLElement {
           }
           .player-points {
             font-size: 10px;
-            min-width: 28px;
-          }
-          .position-cell {
-            font-size: 9px;
-            padding: 4px 2px;
+            min-width: 30px;
           }
           .player-cell {
-            padding: 0 2px;
+            padding: 0 1px;
+          }
+          .player-image {
+            width: 28px;
+            height: 28px;
+          }
+          .our-player .player-info {
+            padding-right: 2px;
+          }
+          .opp-player .player-info {
+            padding-left: 2px;
           }
         }
       </style>
