@@ -26,10 +26,36 @@ class YahooFantasyMatchupCard extends HTMLElement {
     return order[position] || 999;
   }
 
+  formatPlayerName(fullName) {
+    if (!fullName) return 'Unknown';
+    
+    const parts = fullName.trim().split(' ');
+    if (parts.length < 2) return fullName;
+    
+    const firstName = parts[0];
+    const suffixes = ['Jr.', 'Jr', 'Sr.', 'Sr', 'II', 'III', 'IV', 'V'];
+    
+    // Check if the last part is a suffix
+    const lastPart = parts[parts.length - 1];
+    if (suffixes.includes(lastPart) && parts.length >= 3) {
+      // Use the second-to-last part as the last name
+      const lastName = parts[parts.length - 2];
+      return `${firstName.charAt(0)}. ${lastName} ${lastPart}`;
+    } else {
+      // Normal case - use the last part as the last name
+      const lastName = parts[parts.length - 1];
+      return `${firstName.charAt(0)}. ${lastName}`;
+    }
+  }
+
   renderPlayer(player, isOur = true) {
     const playerImg = player.image_url && !player.image_url.includes('blank_player') 
       ? `<img src="${player.image_url}" alt="${player.name}" loading="lazy">` 
       : '<div class="player-placeholder">👤</div>';
+    
+    const points = player.points_total || 0;
+    const pointsDisplay = typeof points === 'number' ? points.toFixed(1) : '0.0';
+    const formattedName = this.formatPlayerName(player.name);
     
     return `
       <div class="player ${isOur ? 'our-player' : 'opp-player'}">
@@ -37,11 +63,14 @@ class YahooFantasyMatchupCard extends HTMLElement {
           ${playerImg}
         </div>
         <div class="player-info">
-          <div class="player-name">${player.name || 'Unknown'}</div>
+          <div class="player-name">${formattedName}</div>
           <div class="player-details">
             <span class="player-team">${player.team || ''}</span>
             ${player.uniform_number ? `<span class="player-number">#${player.uniform_number}</span>` : ''}
           </div>
+        </div>
+        <div class="player-points">
+          ${pointsDisplay}
         </div>
       </div>
     `;
@@ -65,6 +94,8 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const oppScore = attrs.opponent_score || 0;
     const ourProjected = attrs.our_projected_score || 0;
     const oppProjected = attrs.opponent_projected_score || 0;
+    const ourCalculated = attrs.our_calculated_score || 0;
+    const oppCalculated = attrs.opponent_calculated_score || 0;
     const week = attrs.week || '?';
     const status = attrs.status || 'unknown';
     const winner = attrs.winner || 'tbd';
@@ -100,7 +131,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const ourLogo = attrs.our_team_logo || '';
     const oppLogo = attrs.opponent_team_logo || '';
 
-    // Build lineup comparison
+    // Build lineup comparison with single position column
     const maxPlayers = Math.max(ourStarters.length, oppStarters.length);
     let lineupRows = '';
     
@@ -108,24 +139,28 @@ class YahooFantasyMatchupCard extends HTMLElement {
       const ourPlayer = ourStarters[i];
       const oppPlayer = oppStarters[i];
       
+      // Get position from either player (prefer our player's position)
+      const position = (ourPlayer && (ourPlayer.selected_position || ourPlayer.position)) || 
+                      (oppPlayer && (oppPlayer.selected_position || oppPlayer.position)) || '';
+      
       lineupRows += `
         <div class="lineup-row">
-          <div class="position-cell">
-            ${ourPlayer ? ourPlayer.selected_position || ourPlayer.position : ''}
-          </div>
           <div class="player-cell our-side">
             ${ourPlayer ? this.renderPlayer(ourPlayer, true) : '<div class="empty-slot">-</div>'}
           </div>
-          <div class="vs-divider">vs</div>
+          <div class="position-cell">
+            ${position}
+          </div>
           <div class="player-cell opp-side">
             ${oppPlayer ? this.renderPlayer(oppPlayer, false) : '<div class="empty-slot">-</div>'}
-          </div>
-          <div class="position-cell">
-            ${oppPlayer ? oppPlayer.selected_position || oppPlayer.position : ''}
           </div>
         </div>
       `;
     }
+
+    // Show calculated vs official scores if they differ
+    const showCalculatedOur = Math.abs(ourScore - ourCalculated) > 0.1;
+    const showCalculatedOpp = Math.abs(oppScore - oppCalculated) > 0.1;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -133,7 +168,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           background: var(--card-background-color, white);
           border-radius: var(--card-border-radius, 12px);
           box-shadow: var(--card-box-shadow, 0 2px 8px rgba(0,0,0,0.1));
-          padding: 16px;
+          padding: 12px;
           font-family: var(--primary-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
         }
         .header {
@@ -223,10 +258,19 @@ class YahooFantasyMatchupCard extends HTMLElement {
           font-weight: bold;
           color: var(--primary-text-color, #333);
           margin: 4px 0;
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
+        }
+        .calculated-score {
+          font-size: 10px;
+          color: var(--secondary-text-color, #666);
+          font-style: italic;
+          margin-bottom: 4px;
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
         }
         .projected {
           font-size: 10px;
           color: var(--secondary-text-color, #666);
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
         }
         .vs {
           font-size: 16px;
@@ -245,23 +289,41 @@ class YahooFantasyMatchupCard extends HTMLElement {
           margin-bottom: 12px;
           color: var(--primary-text-color, #333);
         }
+        .lineup-header {
+          display: grid;
+          grid-template-columns: 1fr 60px 1fr;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+          padding: 8px 4px;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--secondary-text-color, #666);
+          text-align: center;
+        }
         .lineup-row {
           display: grid;
-          grid-template-columns: 50px 1fr 40px 1fr 50px;
+          grid-template-columns: 1fr 60px 1fr;
           align-items: center;
           gap: 8px;
           margin-bottom: 8px;
           padding: 8px 4px;
           border-radius: 6px;
+          transition: background-color 0.2s ease;
+        }
+        .lineup-row:hover {
+          background: var(--secondary-background-color, #f8f9fa);
         }
         .position-cell {
-          font-size: 10px;
-          font-weight: 600;
+          font-size: 11px;
+          font-weight: 700;
           text-align: center;
-          color: var(--secondary-text-color, #666);
-          padding: 4px 2px;
+          color: var(--primary-text-color, #333);
+          padding: 6px 4px;
           border-radius: 4px;
           width: 100%;
+          background: var(--secondary-background-color, #f0f0f0);
         }
         .player-cell {
           min-height: 50px;
@@ -276,17 +338,6 @@ class YahooFantasyMatchupCard extends HTMLElement {
         .opp-side {
           justify-content: flex-start;
         }
-        .vs-divider {
-          font-size: 10px;
-          font-weight: 600;
-          text-align: center;
-          color: var(--secondary-text-color, #666);
-          width: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 50px;
-        }
         .player {
           display: flex;
           align-items: center;
@@ -295,7 +346,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           border-radius: 0;
           background: transparent;
           border: none;
-          max-width: 200px;
+          max-width: 280px;
           width: 100%;
           overflow: hidden;
         }
@@ -331,7 +382,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           flex: 1;
           min-width: 0;
           overflow: hidden;
-          max-width: calc(100% - 40px);
+          max-width: calc(100% - 80px);
         }
         .our-player .player-info {
           text-align: right;
@@ -365,6 +416,15 @@ class YahooFantasyMatchupCard extends HTMLElement {
           margin-left: 0;
           margin-right: 4px;
         }
+        .player-points {
+          font-size: 12px;
+          font-weight: bold;
+          color: var(--primary-text-color, #333);
+          min-width: 35px;
+          text-align: center;
+          flex-shrink: 0;
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
+        }
         .empty-slot {
           font-size: 12px;
           color: var(--secondary-text-color, #666);
@@ -397,6 +457,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           border-radius: 4px;
           font-size: 12px;
           font-weight: 500;
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
         }
         .score-diff.positive {
           background: rgba(76, 175, 80, 0.1);
@@ -429,13 +490,13 @@ class YahooFantasyMatchupCard extends HTMLElement {
             padding: 0 8px;
             font-size: 12px;
           }
-          .lineup-row {
-            grid-template-columns: 35px minmax(0, 1fr) auto minmax(0, 1fr) 35px;
-            gap: 4px;
+          .lineup-row, .lineup-header {
+            grid-template-columns: 1fr 50px 1fr;
+            gap: 6px;
             padding: 6px 2px;
           }
           .player {
-            max-width: 120px;
+            max-width: 180px;
           }
           .player-name {
             font-size: 10px;
@@ -443,12 +504,13 @@ class YahooFantasyMatchupCard extends HTMLElement {
           .player-details {
             font-size: 8px;
           }
+          .player-points {
+            font-size: 10px;
+            min-width: 28px;
+          }
           .position-cell {
             font-size: 9px;
-            padding: 2px 1px;
-          }
-          .vs-divider {
-            font-size: 9px;
+            padding: 4px 2px;
           }
           .player-cell {
             padding: 0 2px;
@@ -471,6 +533,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
               <div class="team-name">${attrs.our_team_name || 'My Team'}</div>
               <div class="manager-name">${attrs.our_manager || 'Me'}</div>
               <div class="score">${ourScore.toFixed(2)}</div>
+              ${showCalculatedOur ? `<div class="calculated-score">Calc: ${ourCalculated.toFixed(2)}</div>` : ''}
               <div class="projected">Proj: ${ourProjected.toFixed(2)}</div>
             </div>
             ${winner === 'us' ? '<div class="winner-badge">👑</div>' : ''}
@@ -486,6 +549,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
               <div class="team-name">${attrs.opponent_team_name || 'Opponent'}</div>
               <div class="manager-name">${attrs.opponent_manager || 'Unknown'}</div>
               <div class="score">${oppScore.toFixed(2)}</div>
+              ${showCalculatedOpp ? `<div class="calculated-score">Calc: ${oppCalculated.toFixed(2)}</div>` : ''}
               <div class="projected">Proj: ${oppProjected.toFixed(2)}</div>
             </div>
             ${winner === 'opponent' ? '<div class="winner-badge">👑</div>' : ''}
@@ -501,6 +565,11 @@ class YahooFantasyMatchupCard extends HTMLElement {
         ${ourStarters.length > 0 || oppStarters.length > 0 ? `
           <div class="lineup-section">
             <div class="lineup-title">Starting Lineups</div>
+            <div class="lineup-header">
+              <div>Your Team</div>
+              <div>POS</div>
+              <div>Opponent</div>
+            </div>
             ${lineupRows}
           </div>
         ` : ''}
@@ -509,7 +578,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 5;
+    return 6;
   }
 }
 
@@ -520,11 +589,11 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'yahoo-fantasy-matchup-card',
   name: 'Yahoo Fantasy Matchup Card',
-  description: 'A card to display Yahoo Fantasy Football matchup information with starting lineups',
+  description: 'A card to display Yahoo Fantasy Football matchup information with starting lineups and player points',
 });
 
 console.info(
-  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.1.1                ',
+  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.2.0                ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
