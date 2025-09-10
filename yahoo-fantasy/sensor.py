@@ -281,10 +281,146 @@ class YahooFantasyMatchupSensor(Entity):
             _LOGGER.error(f"Error in _get_team_roster for team {team_id}, week {week}: {e}")
             return None
 
-    def _extract_roster_data(self, roster_data):
-        """Extract player information from roster data."""
+    def _get_player_stats(self, player_ids, week):
+        """Get player stats for multiple players in a single API call."""
+        if not player_ids:
+            return {}
+        
+        try:
+            # Build the players query string for batch request
+            # Yahoo API allows requesting multiple players in one call
+            player_keys = [f"{self._game_key}.p.{pid}" for pid in player_ids]
+            
+            # Batch request for up to 25 players at a time (Yahoo API limit)
+            all_stats = {}
+            batch_size = 25
+            
+            for i in range(0, len(player_keys), batch_size):
+                batch = player_keys[i:i + batch_size]
+                players_query = ",".join(batch)
+                
+                # Request player stats for the specific week
+                stats_url = f"https://fantasysports.yahooapis.com/fantasy/v2/players;player_keys={players_query}/stats;type=week;week={week}?format=json"
+                
+                try:
+                    stats_data = self._make_api_request(stats_url)
+                    if stats_data:
+                        batch_stats = self._extract_player_stats(stats_data)
+                        all_stats.update(batch_stats)
+                except Exception as e:
+                    _LOGGER.warning(f"Failed to fetch stats for batch starting at index {i}: {e}")
+                    continue
+                
+                # Small delay between batch requests to be respectful
+                if i + batch_size < len(player_keys):
+                    time.sleep(0.5)
+            
+            return all_stats
+            
+        except Exception as e:
+            _LOGGER.error(f"Error in _get_player_stats: {e}")
+            return {}
+
+    def _extract_player_stats(self, stats_data):
+        """Extract player statistics from the API response."""
+        player_stats = {}
+        
+        try:
+            # Navigate through the response to find players
+            players_data = find_key(stats_data, "players")
+            
+            if not players_data:
+                return player_stats
+
+            # Process players
+            player_items = []
+            if isinstance(players_data, dict):
+                player_items = [v for k, v in players_data.items() if k != "count"]
+            elif isinstance(players_data, list):
+                player_items = players_data
+
+            for player_item in player_items:
+                player_info = None
+                
+                if isinstance(player_item, dict):
+                    if "player" in player_item:
+                        player_info = player_item["player"]
+                    else:
+                        player_info = player_item
+                
+                if not player_info:
+                    continue
+
+                # Extract player ID
+                player_id = find_key(player_info, "player_id")
+                if not player_id:
+                    continue
+
+                # Extract stats
+                stats = find_key(player_info, "player_stats")
+                if not stats:
+                    continue
+
+                # Look for stats data
+                stats_data_list = find_key(stats, "stats")
+                if not stats_data_list:
+                    continue
+
+                # Initialize player stats
+                player_stats[str(player_id)] = {
+                    "points_total": 0.0,
+                    "stats": {}
+                }
+
+                # Process stats - can be in different formats
+                if isinstance(stats_data_list, list):
+                    for stat_item in stats_data_list:
+                        if isinstance(stat_item, dict):
+                            stat_info = stat_item.get("stat", stat_item)
+                            if isinstance(stat_info, dict):
+                                stat_id = stat_info.get("stat_id")
+                                value = stat_info.get("value")
+                                
+                                # Yahoo often includes the total points as stat_id 0
+                                if stat_id == "0" and value is not None:
+                                    try:
+                                        player_stats[str(player_id)]["points_total"] = float(value)
+                                    except (ValueError, TypeError):
+                                        pass
+                                
+                                # Store all stats by ID
+                                if stat_id and value is not None:
+                                    player_stats[str(player_id)]["stats"][stat_id] = value
+                elif isinstance(stats_data_list, dict):
+                    # Sometimes stats come as a dict
+                    for key, stat_item in stats_data_list.items():
+                        if key != "count" and isinstance(stat_item, dict):
+                            stat_info = stat_item.get("stat", stat_item)
+                            if isinstance(stat_info, dict):
+                                stat_id = stat_info.get("stat_id")
+                                value = stat_info.get("value")
+                                
+                                if stat_id == "0" and value is not None:
+                                    try:
+                                        player_stats[str(player_id)]["points_total"] = float(value)
+                                    except (ValueError, TypeError):
+                                        pass
+                                
+                                if stat_id and value is not None:
+                                    player_stats[str(player_id)]["stats"][stat_id] = value
+
+        except Exception as e:
+            _LOGGER.error(f"Error extracting player stats: {e}")
+        
+        return player_stats
+
+    def _extract_roster_data(self, roster_data, player_stats=None):
+        """Extract player information from roster data, including stats if provided."""
         if not roster_data:
             return []
+
+        if player_stats is None:
+            player_stats = {}
 
         players = []
         try:
@@ -333,7 +469,9 @@ class YahooFantasyMatchupSensor(Entity):
                     "team": find_key(player_info, "editorial_team_abbr"),
                     "is_starting": False,
                     "image_url": find_key(player_info, "image_url"),
-                    "uniform_number": find_key(player_info, "uniform_number")
+                    "uniform_number": find_key(player_info, "uniform_number"),
+                    "points_total": 0.0,  # Default to 0
+                    "stats": {}  # Individual stats
                 }
 
                 # Look for selected_position - handle the array structure properly
@@ -359,6 +497,12 @@ class YahooFantasyMatchupSensor(Entity):
                     player["is_starting"] = selected_position not in bench_positions
                 else:
                     player["is_starting"] = False
+
+                # Add player stats if available
+                if player_id and str(player_id) in player_stats:
+                    stats_info = player_stats[str(player_id)]
+                    player["points_total"] = stats_info.get("points_total", 0.0)
+                    player["stats"] = stats_info.get("stats", {})
 
                 # Only add if we have basic info
                 if player["player_id"] and player["name"]:
@@ -557,32 +701,65 @@ class YahooFantasyMatchupSensor(Entity):
                 self._attributes = {"error": "Could not find our team in matchup data"}
                 return
 
-            # Get roster data for both teams
-            our_roster = []
-            opponent_roster = []
+            # Get roster data for both teams (without stats first)
+            our_roster_data = None
+            opp_roster_data = None
             
             try:
                 our_roster_data = self._get_team_roster(self._team_id, current_week)
-                if our_roster_data:
-                    our_roster = self._extract_roster_data(our_roster_data)
             except Exception as e:
                 _LOGGER.warning(f"Could not fetch our team roster: {e}")
 
             if opponent_team:
                 try:
                     opp_roster_data = self._get_team_roster(opponent_team.get("team_id"), current_week)
-                    if opp_roster_data:
-                        opponent_roster = self._extract_roster_data(opp_roster_data)
                 except Exception as e:
                     _LOGGER.warning(f"Could not fetch opponent roster: {e}")
+
+            # Collect all player IDs for batch stats request
+            all_player_ids = []
+            
+            if our_roster_data:
+                our_roster_temp = self._extract_roster_data(our_roster_data)
+                all_player_ids.extend([p["player_id"] for p in our_roster_temp if p.get("player_id")])
+            
+            if opp_roster_data:
+                opp_roster_temp = self._extract_roster_data(opp_roster_data)
+                all_player_ids.extend([p["player_id"] for p in opp_roster_temp if p.get("player_id")])
+
+            # Get player stats for all players in batch
+            player_stats = {}
+            if all_player_ids:
+                try:
+                    player_stats = self._get_player_stats(all_player_ids, current_week)
+                    _LOGGER.debug(f"Retrieved stats for {len(player_stats)} players")
+                except Exception as e:
+                    _LOGGER.warning(f"Could not fetch player stats: {e}")
+
+            # Now extract roster data with stats included
+            our_roster = []
+            opponent_roster = []
+            
+            if our_roster_data:
+                our_roster = self._extract_roster_data(our_roster_data, player_stats)
+            
+            if opp_roster_data:
+                opponent_roster = self._extract_roster_data(opp_roster_data, player_stats)
+
+            # Calculate team totals from player points (as backup/validation)
+            our_calculated_score = sum(p.get("points_total", 0) for p in our_roster if p.get("is_starting"))
+            opponent_calculated_score = sum(p.get("points_total", 0) for p in opponent_roster if p.get("is_starting")) if opponent_roster else 0
 
             # Determine matchup status and winner
             status = matchup_data.get("status", "unknown")
             is_tied = matchup_data.get("is_tied") == "1"
             winner_team_key = matchup_data.get("winner_team_key")
             
-            # Set state based on our team's score
+            # Set state based on our team's score (prefer official score, fall back to calculated)
             our_score = our_team.get("score")
+            if our_score is None and our_calculated_score > 0:
+                our_score = our_calculated_score
+            
             self._state = our_score if our_score is not None else "unknown"
 
             # Build attributes
@@ -597,6 +774,7 @@ class YahooFantasyMatchupSensor(Entity):
                 "our_team_name": our_team.get("name"),
                 "our_manager": our_team.get("manager"),
                 "our_score": our_team.get("score"),
+                "our_calculated_score": our_calculated_score,  # From individual player points
                 "our_projected_score": our_team.get("projected_score"),
                 "our_team_logo": our_team.get("logo"),
                 "our_roster": our_roster,
@@ -609,6 +787,7 @@ class YahooFantasyMatchupSensor(Entity):
                     "opponent_team_name": opponent_team.get("name"),
                     "opponent_manager": opponent_team.get("manager"),
                     "opponent_score": opponent_team.get("score"),
+                    "opponent_calculated_score": opponent_calculated_score,  # From individual player points
                     "opponent_projected_score": opponent_team.get("projected_score"),
                     "opponent_team_logo": opponent_team.get("logo"),
                     "opponent_roster": opponent_roster,
@@ -632,12 +811,46 @@ class YahooFantasyMatchupSensor(Entity):
             else:
                 self._attributes["winner"] = "tbd"
 
+            # Add some summary stats for easy access
+            our_starters = [p for p in our_roster if p.get("is_starting")]
+            our_bench = [p for p in our_roster if not p.get("is_starting")]
+            
+            self._attributes.update({
+                "our_starters_count": len(our_starters),
+                "our_bench_count": len(our_bench),
+                "our_starters_points": sum(p.get("points_total", 0) for p in our_starters),
+                "our_bench_points": sum(p.get("points_total", 0) for p in our_bench),
+            })
+            
+            if opponent_roster:
+                opp_starters = [p for p in opponent_roster if p.get("is_starting")]
+                opp_bench = [p for p in opponent_roster if not p.get("is_starting")]
+                
+                self._attributes.update({
+                    "opponent_starters_count": len(opp_starters),
+                    "opponent_bench_count": len(opp_bench),
+                    "opponent_starters_points": sum(p.get("points_total", 0) for p in opp_starters),
+                    "opponent_bench_points": sum(p.get("points_total", 0) for p in opp_bench),
+                })
+
             # Set entity picture to our team logo
             if our_team.get("logo"):
                 self._attributes["entity_picture"] = our_team.get("logo")
 
             self._last_update = time.time()
-            _LOGGER.debug(f"Updated matchup: {our_team.get('name')} ({our_score}) vs {opponent_team.get('name') if opponent_team else 'Unknown'} ({opponent_team.get('score') if opponent_team else 'Unknown'})")
+            
+            # Enhanced logging with player points info
+            our_points_info = f"{our_score}"
+            if our_calculated_score != our_score:
+                our_points_info += f" (calculated: {our_calculated_score:.2f})"
+                
+            opp_points_info = "Unknown"
+            if opponent_team:
+                opp_points_info = f"{opponent_team.get('score', 'Unknown')}"
+                if opponent_calculated_score != opponent_team.get('score'):
+                    opp_points_info += f" (calculated: {opponent_calculated_score:.2f})"
+            
+            _LOGGER.debug(f"Updated matchup with player scoring: {our_team.get('name')} ({our_points_info}) vs {opponent_team.get('name') if opponent_team else 'Unknown'} ({opp_points_info})")
 
         except Exception as e:
             _LOGGER.error(f"Error updating Yahoo Fantasy matchup sensor: {e}")
