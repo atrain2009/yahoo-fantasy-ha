@@ -47,7 +47,7 @@ Within your configuration.yaml, you'll need to add the platform "yahoo_fantasy" 
 
 | YAML Name | Description | Valid Values |
 | --- | --- | --- |
-| game_id | The sport of the league you want to integrate | I've only tried nfl, but I'd imagine nhl or mlb could also work |
+| game_key | The sport of the league you want to integrate | I've only tried nfl, but I'd imagine nhl or mlb could also work |
 | league_id | Yahoo's ID for your fantasy league | Go to your fantasy team's page through the Yahoo UI and note the URL: it should look something like "https://football.fantasysports.yahoo.com/f1/{league_id}/{team_id}" |
 | team_id | Yahoo's ID for your team within your fantasy league | Go to your fantasy team's page through the Yahoo UI and note the URL: it should look something like "https://football.fantasysports.yahoo.com/f1/{league_id}/{team_id}" |
 
