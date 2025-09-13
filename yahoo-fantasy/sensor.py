@@ -15,6 +15,12 @@ _GLOBAL_OAUTH = None
 _LAST_TOKEN_REFRESH = 0
 _LAST_SESSION_RESET = 0
 
+# Global cache for stat categories and league settings
+_STAT_CATEGORIES_CACHE = {}
+_LEAGUE_SETTINGS_CACHE = {}
+_STAT_CACHE_LOCK = Lock()
+_SETTINGS_CACHE_LOCK = Lock()
+
 def find_key(data, key):
     """Recursively find first occurrence of key in nested dict/list."""
     if isinstance(data, dict):
@@ -238,6 +244,275 @@ class YahooFantasyMatchupSensor(Entity):
                     _LOGGER.warning(f"API request attempt {attempt + 1} failed, retrying: {e}")
                     time.sleep(2 ** attempt)
 
+    def _get_league_settings(self, game_key, league_id):
+        """Fetch and cache league settings including scoring configuration."""
+        global _LEAGUE_SETTINGS_CACHE
+        
+        league_key = f"{game_key}.l.{league_id}"
+        
+        with _SETTINGS_CACHE_LOCK:
+            # Check if we already have cached settings for this league
+            if league_key in _LEAGUE_SETTINGS_CACHE:
+                return _LEAGUE_SETTINGS_CACHE[league_key]
+            
+            try:
+                settings_url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_key}/settings?format=json"
+                settings_data = self._make_api_request(settings_url)
+                
+                if not settings_data:
+                    _LOGGER.warning(f"No league settings data returned for league {league_key}")
+                    return {}
+                
+                # Extract league settings from response
+                league_settings = {
+                    "scoring_type": None,
+                    "roster_positions": [],
+                    "stat_categories": {},
+                    "stat_modifiers": {},
+                    "league_info": {}
+                }
+                
+                # Navigate through the response structure
+                league_data = find_key(settings_data, "league")
+                if not league_data:
+                    _LOGGER.warning("No league data found in settings response")
+                    return {}
+                
+                # Extract basic league info
+                league_settings["league_info"] = {
+                    "name": find_key(league_data, "name"),
+                    "scoring_type": find_key(league_data, "scoring_type"),
+                    "num_teams": find_key(league_data, "num_teams"),
+                    "current_week": find_key(league_data, "current_week"),
+                    "start_week": find_key(league_data, "start_week"),
+                    "end_week": find_key(league_data, "end_week"),
+                    "is_finished": find_key(league_data, "is_finished") == "1"
+                }
+                
+                # Extract settings section
+                settings_section = find_key(league_data, "settings")
+                if not settings_section:
+                    _LOGGER.warning("No settings section found in league data")
+                    return league_settings
+                
+                # Extract roster positions
+                roster_positions = find_key(settings_section, "roster_positions")
+                if roster_positions:
+                    positions_list = []
+                    
+                    # Handle different response formats
+                    if isinstance(roster_positions, dict) and "roster_position" in roster_positions:
+                        roster_pos_data = roster_positions["roster_position"]
+                        if isinstance(roster_pos_data, list):
+                            positions_list = roster_pos_data
+                        elif isinstance(roster_pos_data, dict):
+                            positions_list = [roster_pos_data]
+                    
+                    # Process each position
+                    for pos_item in positions_list:
+                        if isinstance(pos_item, dict):
+                            position = pos_item.get("position")
+                            count = pos_item.get("count")
+                            if position and count:
+                                try:
+                                    league_settings["roster_positions"].append({
+                                        "position": position,
+                                        "count": int(count)
+                                    })
+                                except (ValueError, TypeError):
+                                    pass
+                
+                # Extract stat categories (for reference)
+                stat_categories = find_key(settings_section, "stat_categories")
+                if stat_categories:
+                    stats_data = find_key(stat_categories, "stats")
+                    if stats_data:
+                        # Handle different response formats
+                        stat_items = []
+                        if isinstance(stats_data, dict) and "stat" in stats_data:
+                            stat_list = stats_data["stat"]
+                            if isinstance(stat_list, list):
+                                stat_items = stat_list
+                            elif isinstance(stat_list, dict):
+                                stat_items = [stat_list]
+                        elif isinstance(stats_data, list):
+                            stat_items = stats_data
+                        
+                        # Process each stat category
+                        for stat_item in stat_items:
+                            if isinstance(stat_item, dict):
+                                stat_id = stat_item.get("stat_id")
+                                name = stat_item.get("name")
+                                display_name = stat_item.get("display_name")
+                                enabled = stat_item.get("enabled") == "1"
+                                
+                                if stat_id and name:
+                                    league_settings["stat_categories"][str(stat_id)] = {
+                                        "name": name,
+                                        "display_name": display_name,
+                                        "enabled": enabled,
+                                        "sort_order": stat_item.get("sort_order"),
+                                        "position_type": stat_item.get("position_type"),
+                                        "is_only_display_stat": stat_item.get("is_only_display_stat") == "1"
+                                    }
+                
+                # Extract stat modifiers (scoring values)
+                stat_modifiers = find_key(settings_section, "stat_modifiers")
+                if stat_modifiers:
+                    _LOGGER.debug(f"Found stat_modifiers section: {type(stat_modifiers)}")
+                    stats_data = find_key(stat_modifiers, "stats")
+                    if stats_data:
+                        _LOGGER.debug(f"Found stats data in modifiers: {type(stats_data)}")
+                        # Handle different response formats
+                        stat_items = []
+                        if isinstance(stats_data, list):
+                            # stats_data is already the list of stat items
+                            stat_items = stats_data
+                        elif isinstance(stats_data, dict):
+                            if "stat" in stats_data:
+                                stat_list = stats_data["stat"]
+                                if isinstance(stat_list, list):
+                                    stat_items = stat_list
+                                elif isinstance(stat_list, dict):
+                                    stat_items = [stat_list]
+                            else:
+                                # Sometimes the stats are directly in the stats dict
+                                stat_items = [v for k, v in stats_data.items() if k != "count" and isinstance(v, dict)]
+                        
+                        _LOGGER.debug(f"Processing {len(stat_items)} stat modifier items")
+                        
+                        # Process each stat modifier
+                        for i, stat_item in enumerate(stat_items):
+                            _LOGGER.debug(f"Stat modifier {i}: {stat_item}")
+                            if isinstance(stat_item, dict):
+                                # Handle nested structure - stat_id and value are inside 'stat' key
+                                stat_info = stat_item.get("stat", stat_item)
+                                
+                                if isinstance(stat_info, dict):
+                                    stat_id = stat_info.get("stat_id")
+                                    value = stat_info.get("value")
+                                    
+                                    _LOGGER.debug(f"Stat modifier {i}: stat_id={stat_id}, value={value}, keys={list(stat_info.keys())}")
+                                    
+                                    if stat_id and value is not None:
+                                        try:
+                                            league_settings["stat_modifiers"][str(stat_id)] = float(value)
+                                            _LOGGER.debug(f"Successfully added stat_id {stat_id} with value {value}")
+                                        except (ValueError, TypeError) as e:
+                                            _LOGGER.warning(f"Failed to convert value {value} for stat_id {stat_id}: {e}")
+                                            league_settings["stat_modifiers"][str(stat_id)] = value
+                                    else:
+                                        _LOGGER.warning(f"Missing stat_id or value in item {i}: stat_id={stat_id}, value={value}")
+                                else:
+                                    _LOGGER.warning(f"stat_info is not a dict for item {i}: {type(stat_info)} - {stat_info}")
+                            else:
+                                _LOGGER.warning(f"Stat item {i} is not a dict: {type(stat_item)} - {stat_item}")
+                
+                # Cache the results
+                _LEAGUE_SETTINGS_CACHE[league_key] = league_settings
+                _LOGGER.info(f"Cached league settings for {league_key}: {len(league_settings['roster_positions'])} roster positions, {len(league_settings['stat_modifiers'])} scoring rules")
+                
+                return league_settings
+                
+            except Exception as e:
+                _LOGGER.error(f"Error fetching league settings for {league_key}: {e}")
+                return {}
+
+    def _get_stat_categories(self, game_key):
+        """Fetch and cache stat categories for a game."""
+        global _STAT_CATEGORIES_CACHE
+        
+        with _STAT_CACHE_LOCK:
+            # Check if we already have cached stat categories for this game
+            if game_key in _STAT_CATEGORIES_CACHE:
+                return _STAT_CATEGORIES_CACHE[game_key]
+            
+            try:
+                stat_url = f"https://fantasysports.yahooapis.com/fantasy/v2/game/{game_key}/stat_categories?format=json"
+                stat_data = self._make_api_request(stat_url)
+                
+                if not stat_data:
+                    _LOGGER.warning(f"No stat categories data returned for game {game_key}")
+                    return {}
+                
+                # Extract stat categories from response
+                stat_categories = {}
+                
+                # Navigate through the response structure
+                stats_data = find_key(stat_data, "stat_categories")
+                if not stats_data:
+                    _LOGGER.warning("No stat_categories found in response")
+                    return {}
+                
+                # Handle different response formats
+                stat_items = []
+                if isinstance(stats_data, dict):
+                    if "stats" in stats_data:
+                        stats_list = stats_data["stats"]
+                        if isinstance(stats_list, dict):
+                            stat_items = [v for k, v in stats_list.items() if k != "count"]
+                        elif isinstance(stats_list, list):
+                            stat_items = stats_list
+                    else:
+                        # Sometimes the stats are directly in the stat_categories
+                        stat_items = [v for k, v in stats_data.items() if k != "count"]
+                elif isinstance(stats_data, list):
+                    stat_items = stats_data
+                
+                # Process each stat category
+                for stat_item in stat_items:
+                    if isinstance(stat_item, dict):
+                        stat_info = stat_item.get("stat", stat_item)
+                        if isinstance(stat_info, dict):
+                            stat_id = stat_info.get("stat_id")
+                            name = stat_info.get("name") or stat_info.get("display_name")
+                            abbr = stat_info.get("abbr")
+                            
+                            if stat_id and name:
+                                stat_categories[str(stat_id)] = {
+                                    "name": name,
+                                    "abbr": abbr,
+                                    "display_name": abbr if abbr else name
+                                }
+                
+                # Cache the results
+                _STAT_CATEGORIES_CACHE[game_key] = stat_categories
+                _LOGGER.info(f"Cached {len(stat_categories)} stat categories for game {game_key}")
+                
+                return stat_categories
+                
+            except Exception as e:
+                _LOGGER.error(f"Error fetching stat categories for game {game_key}: {e}")
+                return {}
+
+    def _calculate_projected_points(self, player_stats, stat_modifiers):
+        """Calculate projected points for a player based on their stats and league scoring."""
+        if not player_stats or not stat_modifiers:
+            return 0.0
+        
+        projected_points = 0.0
+        
+        try:
+            # Get the player's stats by ID
+            stats_by_id = player_stats.get("stats_by_id", {})
+            
+            # Calculate points for each stat
+            for stat_id, stat_value in stats_by_id.items():
+                if stat_id in stat_modifiers:
+                    modifier = stat_modifiers[stat_id]
+                    try:
+                        stat_val = float(stat_value)
+                        mod_val = float(modifier)
+                        points = stat_val * mod_val
+                        projected_points += points
+                    except (ValueError, TypeError):
+                        continue
+            
+        except Exception as e:
+            _LOGGER.debug(f"Error calculating projected points: {e}")
+        
+        return round(projected_points, 2)
+
     def _get_current_week(self):
         """Fetch current week from league data."""
         try:
@@ -369,7 +644,8 @@ class YahooFantasyMatchupSensor(Entity):
                 # Initialize player stats
                 player_stats[str(player_id)] = {
                     "points_total": 0.0,
-                    "stats": {}
+                    "stats": {},
+                    "stats_by_id": {}  # Keep original stat_id mapping as backup
                 }
 
                 # Process stats - can be in different formats
@@ -388,9 +664,9 @@ class YahooFantasyMatchupSensor(Entity):
                                     except (ValueError, TypeError):
                                         pass
                                 
-                                # Store all stats by ID
+                                # Store stats by ID (original format)
                                 if stat_id and value is not None:
-                                    player_stats[str(player_id)]["stats"][stat_id] = value
+                                    player_stats[str(player_id)]["stats_by_id"][stat_id] = value
                 elif isinstance(stats_data_list, dict):
                     # Sometimes stats come as a dict
                     for key, stat_item in stats_data_list.items():
@@ -407,20 +683,50 @@ class YahooFantasyMatchupSensor(Entity):
                                         pass
                                 
                                 if stat_id and value is not None:
-                                    player_stats[str(player_id)]["stats"][stat_id] = value
+                                    player_stats[str(player_id)]["stats_by_id"][stat_id] = value
 
         except Exception as e:
             _LOGGER.error(f"Error extracting player stats: {e}")
         
         return player_stats
 
-    def _extract_roster_data(self, roster_data, player_stats=None):
+    def _convert_stats_with_names(self, stats_by_id, stat_categories):
+        """Convert stat IDs to human-readable names using stat categories."""
+        named_stats = {}
+        
+        for stat_id, value in stats_by_id.items():
+            if stat_id in stat_categories:
+                stat_info = stat_categories[stat_id]
+                # Use abbreviation if available, otherwise use full name
+                display_name = stat_info.get("abbr") or stat_info.get("name")
+                named_stats[display_name] = {
+                    "value": value,
+                    "stat_id": stat_id,
+                    "full_name": stat_info.get("name")
+                }
+            else:
+                # Fallback for unknown stat IDs
+                named_stats[f"Stat_{stat_id}"] = {
+                    "value": value,
+                    "stat_id": stat_id,
+                    "full_name": f"Unknown Stat {stat_id}"
+                }
+        
+        return named_stats
+
+    def _extract_roster_data(self, roster_data, player_stats=None, stat_categories=None, stat_modifiers=None):
         """Extract player information from roster data, including stats if provided."""
         if not roster_data:
             return []
 
         if player_stats is None:
             player_stats = {}
+        
+        if stat_categories is None:
+            stat_categories = {}
+            
+        if stat_modifiers is None:
+            stat_modifiers = {}
 
         players = []
         try:
@@ -471,7 +777,9 @@ class YahooFantasyMatchupSensor(Entity):
                     "image_url": find_key(player_info, "image_url"),
                     "uniform_number": find_key(player_info, "uniform_number"),
                     "points_total": 0.0,  # Default to 0
-                    "stats": {}  # Individual stats
+                    "calculated_points": 0.0,  # NEW: Points calculated from league scoring
+                    "stats": {},  # Named stats (new format)
+                    "stats_by_id": {}  # Original stat ID format (for compatibility)
                 }
 
                 # Look for selected_position - handle the array structure properly
@@ -501,8 +809,29 @@ class YahooFantasyMatchupSensor(Entity):
                 # Add player stats if available
                 if player_id and str(player_id) in player_stats:
                     stats_info = player_stats[str(player_id)]
-                    player["points_total"] = stats_info.get("points_total", 0.0)
-                    player["stats"] = stats_info.get("stats", {})
+                    
+                    # Calculate points using league scoring if available
+                    if stat_modifiers and stats_info.get("stats_by_id"):
+                        calculated_points = self._calculate_projected_points(stats_info, stat_modifiers)
+                        player["points_total"] = calculated_points  # Use calculated points as primary
+                        player["yahoo_points"] = stats_info.get("points_total", 0.0)  # Keep Yahoo's points as reference
+                    else:
+                        # Fallback to Yahoo's points if we can't calculate
+                        player["points_total"] = stats_info.get("points_total", 0.0)
+                        player["yahoo_points"] = stats_info.get("points_total", 0.0)
+                    
+                    player["stats_by_id"] = stats_info.get("stats_by_id", {})
+                    
+                    # Convert stats to named format if stat categories are available
+                    if stat_categories and player["stats_by_id"]:
+                        player["stats"] = self._convert_stats_with_names(
+                            player["stats_by_id"], 
+                            stat_categories
+                        )
+                    else:
+                        # Fallback to numbered stats
+                        player["stats"] = {f"Stat_{k}": {"value": v, "stat_id": k} 
+                                        for k, v in player["stats_by_id"].items()}
 
                 # Only add if we have basic info
                 if player["player_id"] and player["name"]:
@@ -661,6 +990,15 @@ class YahooFantasyMatchupSensor(Entity):
             if not self._should_update():
                 return
 
+            # Get league settings (includes scoring) - cached after first call
+            league_settings = self._get_league_settings(self._game_key, self._league_id)
+            stat_modifiers = league_settings.get("stat_modifiers", {})
+            _LOGGER.debug(f"Loaded league settings with {len(stat_modifiers)} scoring rules")
+
+            # Get stat categories for this game (cached after first call)
+            stat_categories = self._get_stat_categories(self._game_key)
+            _LOGGER.debug(f"Loaded {len(stat_categories)} stat categories for game {self._game_key}")
+
             # Get current week
             current_week = self._get_current_week()
             if not current_week:
@@ -736,19 +1074,23 @@ class YahooFantasyMatchupSensor(Entity):
                 except Exception as e:
                     _LOGGER.warning(f"Could not fetch player stats: {e}")
 
-            # Now extract roster data with stats included
+            # Now extract roster data with stats, stat categories, and scoring included
             our_roster = []
             opponent_roster = []
             
             if our_roster_data:
-                our_roster = self._extract_roster_data(our_roster_data, player_stats)
+                our_roster = self._extract_roster_data(our_roster_data, player_stats, stat_categories, stat_modifiers)
             
             if opp_roster_data:
-                opponent_roster = self._extract_roster_data(opp_roster_data, player_stats)
+                opponent_roster = self._extract_roster_data(opp_roster_data, player_stats, stat_categories, stat_modifiers)
 
             # Calculate team totals from player points (as backup/validation)
             our_calculated_score = sum(p.get("points_total", 0) for p in our_roster if p.get("is_starting"))
             opponent_calculated_score = sum(p.get("points_total", 0) for p in opponent_roster if p.get("is_starting")) if opponent_roster else 0
+
+            # Calculate scores using league scoring rules
+            our_scoring_calculated = sum(p.get("calculated_points", 0) for p in our_roster if p.get("is_starting"))
+            opponent_scoring_calculated = sum(p.get("calculated_points", 0) for p in opponent_roster if p.get("is_starting")) if opponent_roster else 0
 
             # Determine matchup status and winner
             status = matchup_data.get("status", "unknown")
@@ -762,7 +1104,7 @@ class YahooFantasyMatchupSensor(Entity):
             
             self._state = our_score if our_score is not None else "unknown"
 
-            # Build attributes
+            # Build attributes with enhanced scoring information
             self._attributes = {
                 "league_id": self._league_id,
                 "week": matchup_data.get("week"),
@@ -775,6 +1117,7 @@ class YahooFantasyMatchupSensor(Entity):
                 "our_manager": our_team.get("manager"),
                 "our_score": our_team.get("score"),
                 "our_calculated_score": our_calculated_score,  # From individual player points
+                "our_scoring_calculated": our_scoring_calculated,  # NEW: Using league scoring rules
                 "our_projected_score": our_team.get("projected_score"),
                 "our_team_logo": our_team.get("logo"),
                 "our_roster": our_roster,
@@ -788,6 +1131,7 @@ class YahooFantasyMatchupSensor(Entity):
                     "opponent_manager": opponent_team.get("manager"),
                     "opponent_score": opponent_team.get("score"),
                     "opponent_calculated_score": opponent_calculated_score,  # From individual player points
+                    "opponent_scoring_calculated": opponent_scoring_calculated,  # NEW: Using league scoring rules
                     "opponent_projected_score": opponent_team.get("projected_score"),
                     "opponent_team_logo": opponent_team.get("logo"),
                     "opponent_roster": opponent_roster,
@@ -820,6 +1164,8 @@ class YahooFantasyMatchupSensor(Entity):
                 "our_bench_count": len(our_bench),
                 "our_starters_points": sum(p.get("points_total", 0) for p in our_starters),
                 "our_bench_points": sum(p.get("points_total", 0) for p in our_bench),
+                "our_starters_scoring_points": sum(p.get("calculated_points", 0) for p in our_starters),  # NEW
+                "our_bench_scoring_points": sum(p.get("calculated_points", 0) for p in our_bench),  # NEW
             })
             
             if opponent_roster:
@@ -831,7 +1177,35 @@ class YahooFantasyMatchupSensor(Entity):
                     "opponent_bench_count": len(opp_bench),
                     "opponent_starters_points": sum(p.get("points_total", 0) for p in opp_starters),
                     "opponent_bench_points": sum(p.get("points_total", 0) for p in opp_bench),
+                    "opponent_starters_scoring_points": sum(p.get("calculated_points", 0) for p in opp_starters),  # NEW
+                    "opponent_bench_scoring_points": sum(p.get("calculated_points", 0) for p in opp_bench),  # NEW
                 })
+
+            # Add league settings info to attributes for reference
+            if league_settings:
+                self._attributes["league_settings"] = {
+                    "league_info": league_settings.get("league_info", {}),
+                    "roster_positions": league_settings.get("roster_positions", []),
+                    "scoring_rules": {
+                        stat_id: {
+                            "modifier": modifier,
+                            "stat_name": league_settings.get("stat_categories", {}).get(stat_id, {}).get("name", f"Stat {stat_id}"),
+                            "display_name": league_settings.get("stat_categories", {}).get(stat_id, {}).get("display_name", f"Stat {stat_id}")
+                        }
+                        for stat_id, modifier in stat_modifiers.items()
+                    }
+                }
+
+            # Add stat categories info to attributes for reference
+            if stat_categories:
+                self._attributes["available_stat_categories"] = {
+                    stat_id: {
+                        "name": info["name"],
+                        "abbr": info.get("abbr"),
+                        "display_name": info.get("display_name")
+                    }
+                    for stat_id, info in stat_categories.items()
+                }
 
             # Set entity picture to our team logo
             if our_team.get("logo"):
@@ -839,18 +1213,22 @@ class YahooFantasyMatchupSensor(Entity):
 
             self._last_update = time.time()
             
-            # Enhanced logging with player points info
+            # Enhanced logging with scoring information
             our_points_info = f"{our_score}"
             if our_calculated_score != our_score:
                 our_points_info += f" (calculated: {our_calculated_score:.2f})"
+            if our_scoring_calculated != our_score:
+                our_points_info += f" (league scoring: {our_scoring_calculated:.2f})"
                 
             opp_points_info = "Unknown"
             if opponent_team:
                 opp_points_info = f"{opponent_team.get('score', 'Unknown')}"
                 if opponent_calculated_score != opponent_team.get('score'):
                     opp_points_info += f" (calculated: {opponent_calculated_score:.2f})"
+                if opponent_scoring_calculated != opponent_team.get('score'):
+                    opp_points_info += f" (league scoring: {opponent_scoring_calculated:.2f})"
             
-            _LOGGER.debug(f"Updated matchup with player scoring: {our_team.get('name')} ({our_points_info}) vs {opponent_team.get('name') if opponent_team else 'Unknown'} ({opp_points_info})")
+            _LOGGER.info(f"Updated matchup with league scoring: {our_team.get('name')} ({our_points_info}) vs {opponent_team.get('name') if opponent_team else 'Unknown'} ({opp_points_info}). Scoring rules: {len(stat_modifiers)}")
 
         except Exception as e:
             _LOGGER.error(f"Error updating Yahoo Fantasy matchup sensor: {e}")
