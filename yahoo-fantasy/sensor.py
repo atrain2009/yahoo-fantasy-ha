@@ -77,7 +77,6 @@ def reset_oauth_session():
         
         # Prevent too frequent resets
         if current_time - _LAST_SESSION_RESET < 5:
-            _LOGGER.debug("Skipping session reset - too recent")
             return
         
         if _GLOBAL_OAUTH:
@@ -147,7 +146,6 @@ class YahooFantasyMatchupSensor(Entity):
         """Check if enough time has passed to warrant an update."""
         current_time = time.time()
         if current_time - self._last_update < self._min_update_interval:
-            _LOGGER.debug(f"Skipping update, last update was {current_time - self._last_update:.1f}s ago")
             return False
         return True
 
@@ -163,7 +161,6 @@ class YahooFantasyMatchupSensor(Entity):
                 force_refresh = True
                 # Don't apply the time restriction for 401 errors
             elif force_refresh and (current_time - _LAST_TOKEN_REFRESH) < 30:
-                _LOGGER.debug("Skipping token refresh - too recent")
                 return True
             
             try:
@@ -192,15 +189,12 @@ class YahooFantasyMatchupSensor(Entity):
         
         for attempt in range(max_retries):
             try:
-                _LOGGER.debug(f"Making API request to: {url} (attempt {attempt + 1})")
-                
                 # Only do standard refresh on first attempt
                 if attempt == 0:
                     if not self._refresh_oauth_if_needed():
                         raise Exception("Failed to ensure valid OAuth token")
                 
                 response = self._oauth.session.get(url, timeout=30)
-                _LOGGER.debug(f"API response status: {response.status_code}")
                 
                 if response.status_code == 401:
                     self._consecutive_401_errors += 1
@@ -359,10 +353,8 @@ class YahooFantasyMatchupSensor(Entity):
                 # Extract stat modifiers (scoring values)
                 stat_modifiers = find_key(settings_section, "stat_modifiers")
                 if stat_modifiers:
-                    _LOGGER.debug(f"Found stat_modifiers section: {type(stat_modifiers)}")
                     stats_data = find_key(stat_modifiers, "stats")
                     if stats_data:
-                        _LOGGER.debug(f"Found stats data in modifiers: {type(stats_data)}")
                         # Handle different response formats
                         stat_items = []
                         if isinstance(stats_data, list):
@@ -379,11 +371,8 @@ class YahooFantasyMatchupSensor(Entity):
                                 # Sometimes the stats are directly in the stats dict
                                 stat_items = [v for k, v in stats_data.items() if k != "count" and isinstance(v, dict)]
                         
-                        _LOGGER.debug(f"Processing {len(stat_items)} stat modifier items")
-                        
                         # Process each stat modifier
                         for i, stat_item in enumerate(stat_items):
-                            _LOGGER.debug(f"Stat modifier {i}: {stat_item}")
                             if isinstance(stat_item, dict):
                                 # Handle nested structure - stat_id and value are inside 'stat' key
                                 stat_info = stat_item.get("stat", stat_item)
@@ -392,12 +381,9 @@ class YahooFantasyMatchupSensor(Entity):
                                     stat_id = stat_info.get("stat_id")
                                     value = stat_info.get("value")
                                     
-                                    _LOGGER.debug(f"Stat modifier {i}: stat_id={stat_id}, value={value}, keys={list(stat_info.keys())}")
-                                    
                                     if stat_id and value is not None:
                                         try:
                                             league_settings["stat_modifiers"][str(stat_id)] = float(value)
-                                            _LOGGER.debug(f"Successfully added stat_id {stat_id} with value {value}")
                                         except (ValueError, TypeError) as e:
                                             _LOGGER.warning(f"Failed to convert value {value} for stat_id {stat_id}: {e}")
                                             league_settings["stat_modifiers"][str(stat_id)] = value
@@ -691,26 +677,35 @@ class YahooFantasyMatchupSensor(Entity):
         return player_stats
 
     def _convert_stats_with_names(self, stats_by_id, stat_categories):
-        """Convert stat IDs to human-readable names using stat categories."""
+        """Convert stat IDs to human-readable names with simple value display."""
         named_stats = {}
         
-        for stat_id, value in stats_by_id.items():
-            if stat_id in stat_categories:
-                stat_info = stat_categories[stat_id]
-                # Use abbreviation if available, otherwise use full name
-                display_name = stat_info.get("abbr") or stat_info.get("name")
-                named_stats[display_name] = {
-                    "value": value,
-                    "stat_id": stat_id,
-                    "full_name": stat_info.get("name")
-                }
-            else:
-                # Fallback for unknown stat IDs
-                named_stats[f"Stat_{stat_id}"] = {
-                    "value": value,
-                    "stat_id": stat_id,
-                    "full_name": f"Unknown Stat {stat_id}"
-                }
+        try:
+            for stat_id, value in stats_by_id.items():
+                # Skip stat_id 0 (total points) as it's redundant
+                if stat_id == "0":
+                    continue
+                    
+                # Skip stats with zero values to reduce clutter
+                try:
+                    if float(value) == 0:
+                        continue
+                except (ValueError, TypeError):
+                    # Keep non-numeric values
+                    pass
+                
+                if stat_id in stat_categories:
+                    stat_info = stat_categories[stat_id]
+                    # Use the full name for better readability
+                    display_name = stat_info.get("name") or stat_info.get("display_name") or f"Stat {stat_id}"
+                else:
+                    # Fallback for unknown stat IDs
+                    display_name = f"Stat {stat_id}"
+                
+                # Store as simple name: value format
+                named_stats[display_name] = value
+        except Exception as e:
+            _LOGGER.error(f"Error in _convert_stats_with_names: {e}")
         
         return named_stats
 
@@ -744,98 +739,114 @@ class YahooFantasyMatchupSensor(Entity):
                 player_items = players_data
 
             for player_item in player_items:
-                player_info = None
-                
-                if isinstance(player_item, dict):
-                    if "player" in player_item:
-                        player_info = player_item["player"]
+                try:
+                    player_info = None
+                    
+                    if isinstance(player_item, dict):
+                        if "player" in player_item:
+                            player_info = player_item["player"]
+                        else:
+                            player_info = player_item
+                    
+                    if not player_info:
+                        continue
+
+                    # Extract basic info with error handling
+                    player_id = find_key(player_info, "player_id")
+                    
+                    # Extract name with better error handling
+                    name_data = find_key(player_info, "name")
+                    player_name = "Unknown"
+                    if isinstance(name_data, dict):
+                        full_name = name_data.get("full")
+                        if full_name:
+                            player_name = full_name
+                        else:
+                            first = name_data.get("first", "")
+                            last = name_data.get("last", "")
+                            if first or last:
+                                player_name = f"{first} {last}".strip()
+                    elif isinstance(name_data, str):
+                        player_name = name_data
+
+                    # Extract all the standard fields with error handling
+                    player = {
+                        "player_id": player_id,
+                        "name": player_name,
+                        "position": find_key(player_info, "display_position") or find_key(player_info, "position"),
+                        "selected_position": None,
+                        "team": find_key(player_info, "editorial_team_abbr") or find_key(player_info, "team_abbr"),
+                        "is_starting": False,
+                        "image_url": find_key(player_info, "image_url"),
+                        "uniform_number": find_key(player_info, "uniform_number"),
+                        "points_total": 0.0,  # Default to 0
+                        "stats": {}  # Simplified stats format
+                    }
+
+                    # Look for selected_position - handle the array structure properly
+                    selected_pos_raw = find_key(player_info, "selected_position")
+                    selected_position = None
+
+                    try:
+                        if isinstance(selected_pos_raw, list):
+                            # Parse the array to find position
+                            for item in selected_pos_raw:
+                                if isinstance(item, dict) and "position" in item:
+                                    selected_position = item["position"]
+                                    break
+                        elif isinstance(selected_pos_raw, dict):
+                            selected_position = selected_pos_raw.get("position")
+                        elif isinstance(selected_pos_raw, str):
+                            selected_position = selected_pos_raw
+                    except Exception as e:
+                        _LOGGER.debug(f"Error parsing selected_position for player {player_id}: {e}")
+
+                    player["selected_position"] = selected_position
+
+                    # Determine starting status
+                    if selected_position:
+                        bench_positions = ["BN", "BN*", "IR", "DL", "NA", "O"]
+                        player["is_starting"] = selected_position not in bench_positions
                     else:
-                        player_info = player_item
-                
-                if not player_info:
+                        player["is_starting"] = False
+
+                    # Add player stats if available
+                    if player_id and str(player_id) in player_stats:
+                        try:
+                            stats_info = player_stats[str(player_id)]
+                            
+                            # Calculate points using league scoring if available
+                            if stat_modifiers and stats_info.get("stats_by_id"):
+                                calculated_points = self._calculate_projected_points(stats_info, stat_modifiers)
+                                player["points_total"] = calculated_points  # Use calculated points as primary
+                            else:
+                                # Fallback to Yahoo's points if we can't calculate
+                                player["points_total"] = stats_info.get("points_total", 0.0)
+                            
+                            # Convert stats to named format if stat categories are available
+                            if stat_categories and stats_info.get("stats_by_id"):
+                                player["stats"] = self._convert_stats_with_names(
+                                    stats_info.get("stats_by_id"), 
+                                    stat_categories
+                                )
+                            else:
+                                # Fallback - only show non-zero stats
+                                stats_by_id = stats_info.get("stats_by_id", {})
+                                non_zero_stats = {k: v for k, v in stats_by_id.items() 
+                                                if k != "0" and v != "0" and v != 0}
+                                player["stats"] = {f"Stat {k}": v for k, v in non_zero_stats.items()}
+                        except Exception as e:
+                            _LOGGER.debug(f"Error processing stats for player {player_id}: {e}")
+                            player["points_total"] = 0.0
+                            player["stats"] = {}
+
+                    # Only add if we have basic info
+                    if player["player_id"] and player["name"] != "Unknown":
+                        players.append(player)
+                        
+                except Exception as e:
+                    _LOGGER.debug(f"Error processing player item: {e}")
                     continue
-
-                # Extract basic info
-                player_id = find_key(player_info, "player_id")
-                
-                # Extract name
-                name_data = find_key(player_info, "name")
-                player_name = "Unknown"
-                if isinstance(name_data, dict):
-                    player_name = name_data.get("full") or f"{name_data.get('first', '')} {name_data.get('last', '')}".strip()
-                elif isinstance(name_data, str):
-                    player_name = name_data
-
-                # Extract all the standard fields
-                player = {
-                    "player_id": player_id,
-                    "name": player_name,
-                    "position": find_key(player_info, "display_position"),
-                    "selected_position": None,
-                    "team": find_key(player_info, "editorial_team_abbr"),
-                    "is_starting": False,
-                    "image_url": find_key(player_info, "image_url"),
-                    "uniform_number": find_key(player_info, "uniform_number"),
-                    "points_total": 0.0,  # Default to 0
-                    "calculated_points": 0.0,  # NEW: Points calculated from league scoring
-                    "stats": {},  # Named stats (new format)
-                    "stats_by_id": {}  # Original stat ID format (for compatibility)
-                }
-
-                # Look for selected_position - handle the array structure properly
-                selected_pos_raw = find_key(player_info, "selected_position")
-                selected_position = None
-
-                if isinstance(selected_pos_raw, list):
-                    # Parse the array to find position
-                    for item in selected_pos_raw:
-                        if isinstance(item, dict) and "position" in item:
-                            selected_position = item["position"]
-                            break
-                elif isinstance(selected_pos_raw, dict):
-                    selected_position = selected_pos_raw.get("position")
-                elif isinstance(selected_pos_raw, str):
-                    selected_position = selected_pos_raw
-
-                player["selected_position"] = selected_position
-
-                # Determine starting status
-                if selected_position:
-                    bench_positions = ["BN", "BN*", "IR", "DL", "NA", "O"]
-                    player["is_starting"] = selected_position not in bench_positions
-                else:
-                    player["is_starting"] = False
-
-                # Add player stats if available
-                if player_id and str(player_id) in player_stats:
-                    stats_info = player_stats[str(player_id)]
-                    
-                    # Calculate points using league scoring if available
-                    if stat_modifiers and stats_info.get("stats_by_id"):
-                        calculated_points = self._calculate_projected_points(stats_info, stat_modifiers)
-                        player["points_total"] = calculated_points  # Use calculated points as primary
-                        player["yahoo_points"] = stats_info.get("points_total", 0.0)  # Keep Yahoo's points as reference
-                    else:
-                        # Fallback to Yahoo's points if we can't calculate
-                        player["points_total"] = stats_info.get("points_total", 0.0)
-                        player["yahoo_points"] = stats_info.get("points_total", 0.0)
-                    
-                    player["stats_by_id"] = stats_info.get("stats_by_id", {})
-                    
-                    # Convert stats to named format if stat categories are available
-                    if stat_categories and player["stats_by_id"]:
-                        player["stats"] = self._convert_stats_with_names(
-                            player["stats_by_id"], 
-                            stat_categories
-                        )
-                    else:
-                        # Fallback to numbered stats
-                        player["stats"] = {f"Stat_{k}": {"value": v, "stat_id": k} 
-                                        for k, v in player["stats_by_id"].items()}
-
-                # Only add if we have basic info
-                if player["player_id"] and player["name"]:
-                    players.append(player)
 
         except Exception as e:
             _LOGGER.error(f"Error in _extract_roster_data: {e}")
@@ -847,38 +858,46 @@ class YahooFantasyMatchupSensor(Entity):
         if not team_data:
             return {}
             
-        team_info = {
-            "team_id": find_key(team_data, "team_id"),
-            "name": find_key(team_data, "name"),
-            "manager": find_key(team_data, "nickname"),
-        }
-        
-        # Extract team logo
-        team_logo = find_key(team_data, "team_logo")
-        if isinstance(team_logo, dict):
-            team_info["logo"] = team_logo.get("url")
-        
-        # Extract current score from team_points
-        team_points = find_key(team_data, "team_points")
-        if team_points and isinstance(team_points, dict):
-            total = team_points.get("total")
-            if total is not None:
-                try:
-                    team_info["score"] = float(total)
-                except (ValueError, TypeError):
-                    team_info["score"] = None
-        
-        # Extract projected score
-        projected_points = find_key(team_data, "team_projected_points")
-        if projected_points and isinstance(projected_points, dict):
-            total = projected_points.get("total")
-            if total is not None:
-                try:
-                    team_info["projected_score"] = float(total)
-                except (ValueError, TypeError):
-                    team_info["projected_score"] = None
-        
-        return team_info
+        try:
+            team_info = {
+                "team_id": find_key(team_data, "team_id"),
+                "name": find_key(team_data, "name"),
+                "manager": find_key(team_data, "nickname") or find_key(team_data, "manager"),
+                "score": None,
+                "projected_score": None,
+                "logo": None
+            }
+            
+            # Extract team logo
+            team_logo = find_key(team_data, "team_logo")
+            if isinstance(team_logo, dict):
+                team_info["logo"] = team_logo.get("url")
+            
+            # Extract current score from team_points
+            team_points = find_key(team_data, "team_points")
+            if team_points and isinstance(team_points, dict):
+                total = team_points.get("total")
+                if total is not None:
+                    try:
+                        team_info["score"] = float(total)
+                    except (ValueError, TypeError):
+                        team_info["score"] = None
+            
+            # Extract projected score
+            projected_points = find_key(team_data, "team_projected_points")
+            if projected_points and isinstance(projected_points, dict):
+                total = projected_points.get("total")
+                if total is not None:
+                    try:
+                        team_info["projected_score"] = float(total)
+                    except (ValueError, TypeError):
+                        team_info["projected_score"] = None
+            
+            return team_info
+            
+        except Exception as e:
+            _LOGGER.error(f"Error in _extract_team_data: {e}")
+            return {}
 
     def _find_matchup_data(self, scoreboard_data):
         """Find the matchup containing our team."""
@@ -917,67 +936,72 @@ class YahooFantasyMatchupSensor(Entity):
                 matchup_items = matchups
 
             for matchup_item in matchup_items:
-                matchup_info = None
-                
-                if isinstance(matchup_item, dict):
-                    if "matchup" in matchup_item:
-                        matchup_info = matchup_item["matchup"]
-                    else:
-                        matchup_info = matchup_item
-                
-                if not matchup_info:
-                    continue
-
-                # Get basic matchup info
-                matchup_data = {
-                    "week": find_key(matchup_info, "week"),
-                    "status": find_key(matchup_info, "status"),
-                    "is_tied": find_key(matchup_info, "is_tied"),
-                    "winner_team_key": find_key(matchup_info, "winner_team_key")
-                }
-
-                teams_data = find_key(matchup_info, "teams")
-                if not teams_data:
-                    continue
-
-                # Extract teams
-                team_list = []
-                if isinstance(teams_data, dict):
-                    for key, team_data in teams_data.items():
-                        if key != "count" and isinstance(team_data, dict):
-                            if "team" in team_data:
-                                team_list.append(team_data["team"])
-                            elif "team_id" in team_data:
-                                team_list.append(team_data)
-                elif isinstance(teams_data, list):
-                    for team_data in teams_data:
-                        if isinstance(team_data, dict):
-                            if "team" in team_data:
-                                team_list.append(team_data["team"])
-                            else:
-                                team_list.append(team_data)
-
-                if len(team_list) < 2:
-                    continue
-
-                # Check if our team is in this matchup
-                our_team_found = False
-                for team in team_list:
-                    team_id = find_key(team, "team_id")
-                    if str(team_id) == str(self._team_id):
-                        our_team_found = True
-                        break
-                
-                if our_team_found:
-                    # Extract both teams' data
-                    teams = []
-                    for team in team_list:
-                        team_info = self._extract_team_data(team)
-                        if team_info.get("team_id"):
-                            teams.append(team_info)
+                try:
+                    matchup_info = None
                     
-                    matchup_data["teams"] = teams
-                    return matchup_data
+                    if isinstance(matchup_item, dict):
+                        if "matchup" in matchup_item:
+                            matchup_info = matchup_item["matchup"]
+                        else:
+                            matchup_info = matchup_item
+                    
+                    if not matchup_info:
+                        continue
+
+                    # Get basic matchup info
+                    matchup_data = {
+                        "week": find_key(matchup_info, "week"),
+                        "status": find_key(matchup_info, "status"),
+                        "is_tied": find_key(matchup_info, "is_tied"),
+                        "winner_team_key": find_key(matchup_info, "winner_team_key")
+                    }
+
+                    teams_data = find_key(matchup_info, "teams")
+                    if not teams_data:
+                        continue
+
+                    # Extract teams
+                    team_list = []
+                    if isinstance(teams_data, dict):
+                        for key, team_data in teams_data.items():
+                            if key != "count" and isinstance(team_data, dict):
+                                if "team" in team_data:
+                                    team_list.append(team_data["team"])
+                                elif "team_id" in team_data:
+                                    team_list.append(team_data)
+                    elif isinstance(teams_data, list):
+                        for team_data in teams_data:
+                            if isinstance(team_data, dict):
+                                if "team" in team_data:
+                                    team_list.append(team_data["team"])
+                                else:
+                                    team_list.append(team_data)
+
+                    if len(team_list) < 2:
+                        continue
+
+                    # Check if our team is in this matchup
+                    our_team_found = False
+                    for team in team_list:
+                        team_id = find_key(team, "team_id")
+                        if str(team_id) == str(self._team_id):
+                            our_team_found = True
+                            break
+                    
+                    if our_team_found:
+                        # Extract both teams' data
+                        teams = []
+                        for team in team_list:
+                            team_info = self._extract_team_data(team)
+                            if team_info.get("team_id"):
+                                teams.append(team_info)
+                        
+                        matchup_data["teams"] = teams
+                        return matchup_data
+                        
+                except Exception as e:
+                    _LOGGER.debug(f"Error processing matchup item: {e}")
+                    continue
 
         except Exception as e:
             _LOGGER.error(f"Error finding matchup data: {e}")
@@ -987,41 +1011,67 @@ class YahooFantasyMatchupSensor(Entity):
     def update(self):
         """Fetch the latest matchup data."""
         try:
-            if not self._should_update():
+            # Always allow update on first run
+            if self._state is None:
+                pass  # First run
+            elif not self._should_update():
                 return
 
+            _LOGGER.debug("Starting Yahoo Fantasy matchup update")
+
+            # Initialize with safe defaults
+            self._state = "updating"
+            self._attributes = {
+                "league_id": self._league_id,
+                "team_id": self._team_id,
+                "status": "updating"
+            }
+
             # Get league settings (includes scoring) - cached after first call
-            league_settings = self._get_league_settings(self._game_key, self._league_id)
-            stat_modifiers = league_settings.get("stat_modifiers", {})
-            _LOGGER.debug(f"Loaded league settings with {len(stat_modifiers)} scoring rules")
+            try:
+                league_settings = self._get_league_settings(self._game_key, self._league_id)
+                stat_modifiers = league_settings.get("stat_modifiers", {})
+            except Exception as e:
+                _LOGGER.warning(f"Could not fetch league settings: {e}")
+                league_settings = {}
+                stat_modifiers = {}
 
             # Get stat categories for this game (cached after first call)
-            stat_categories = self._get_stat_categories(self._game_key)
-            _LOGGER.debug(f"Loaded {len(stat_categories)} stat categories for game {self._game_key}")
+            try:
+                stat_categories = self._get_stat_categories(self._game_key)
+            except Exception as e:
+                _LOGGER.warning(f"Could not fetch stat categories: {e}")
+                stat_categories = {}
 
             # Get current week
             current_week = self._get_current_week()
             if not current_week:
                 self._state = "error"
-                self._attributes = {"error": "Could not determine current week"}
+                self._attributes.update({
+                    "error": "Could not determine current week",
+                    "status": "error"
+                })
                 return
 
             # Get scoreboard data
             scoreboard_data = self._get_scoreboard_data(current_week)
             if not scoreboard_data:
                 self._state = "error"
-                self._attributes = {"error": "Could not fetch scoreboard data"}
+                self._attributes.update({
+                    "error": "Could not fetch scoreboard data",
+                    "status": "error"
+                })
                 return
 
             # Find our matchup
             matchup_data = self._find_matchup_data(scoreboard_data)
             if not matchup_data:
                 self._state = "no_matchup"
-                self._attributes = {
+                self._attributes.update({
                     "error": "No matchup found for current week",
                     "week": current_week,
-                    "league_id": self._league_id
-                }
+                    "status": "no_matchup"
+                })
                 return
 
             # Find our team and opponent
@@ -1036,7 +1086,10 @@ class YahooFantasyMatchupSensor(Entity):
 
             if not our_team:
                 self._state = "error"
-                self._attributes = {"error": "Could not find our team in matchup data"}
+                self._attributes.update({
+                    "error": "Could not find our team in matchup data",
+                    "status": "error"
+                })
                 return
 
             # Get roster data for both teams (without stats first)
@@ -1070,7 +1123,6 @@ class YahooFantasyMatchupSensor(Entity):
             if all_player_ids:
                 try:
                     player_stats = self._get_player_stats(all_player_ids, current_week)
-                    _LOGGER.debug(f"Retrieved stats for {len(player_stats)} players")
                 except Exception as e:
                     _LOGGER.warning(f"Could not fetch player stats: {e}")
 
@@ -1084,29 +1136,26 @@ class YahooFantasyMatchupSensor(Entity):
             if opp_roster_data:
                 opponent_roster = self._extract_roster_data(opp_roster_data, player_stats, stat_categories, stat_modifiers)
 
-            # Calculate team totals from player points (as backup/validation)
+            # Calculate team totals from player points
             our_calculated_score = sum(p.get("points_total", 0) for p in our_roster if p.get("is_starting"))
             opponent_calculated_score = sum(p.get("points_total", 0) for p in opponent_roster if p.get("is_starting")) if opponent_roster else 0
-
-            # Calculate scores using league scoring rules
-            our_scoring_calculated = sum(p.get("calculated_points", 0) for p in our_roster if p.get("is_starting"))
-            opponent_scoring_calculated = sum(p.get("calculated_points", 0) for p in opponent_roster if p.get("is_starting")) if opponent_roster else 0
 
             # Determine matchup status and winner
             status = matchup_data.get("status", "unknown")
             is_tied = matchup_data.get("is_tied") == "1"
             winner_team_key = matchup_data.get("winner_team_key")
             
-            # Set state based on our team's score (prefer official score, fall back to calculated)
-            our_score = our_team.get("score")
-            if our_score is None and our_calculated_score > 0:
-                our_score = our_calculated_score
-            
-            self._state = our_score if our_score is not None else "unknown"
+            # Set state based on our team's score (prefer calculated score)
+            our_score = our_calculated_score if our_calculated_score > 0 else our_team.get("score")
+            if our_score is None:
+                our_score = 0.0
+                
+            self._state = round(our_score, 2)
 
-            # Build attributes with enhanced scoring information
+            # Build attributes
             self._attributes = {
                 "league_id": self._league_id,
+                "team_id": self._team_id,
                 "week": matchup_data.get("week"),
                 "status": status,
                 "is_tied": is_tied,
@@ -1115,9 +1164,7 @@ class YahooFantasyMatchupSensor(Entity):
                 "our_team_id": our_team.get("team_id"),
                 "our_team_name": our_team.get("name"),
                 "our_manager": our_team.get("manager"),
-                "our_score": our_team.get("score"),
-                "our_calculated_score": our_calculated_score,  # From individual player points
-                "our_scoring_calculated": our_scoring_calculated,  # NEW: Using league scoring rules
+                "our_score": round(our_score, 2),
                 "our_projected_score": our_team.get("projected_score"),
                 "our_team_logo": our_team.get("logo"),
                 "our_roster": our_roster,
@@ -1125,21 +1172,22 @@ class YahooFantasyMatchupSensor(Entity):
             
             # Add opponent info if available
             if opponent_team:
+                opponent_score = opponent_calculated_score if opponent_calculated_score > 0 else opponent_team.get("score")
+                if opponent_score is None:
+                    opponent_score = 0.0
+                
                 self._attributes.update({
                     "opponent_team_id": opponent_team.get("team_id"),
                     "opponent_team_name": opponent_team.get("name"),
                     "opponent_manager": opponent_team.get("manager"),
-                    "opponent_score": opponent_team.get("score"),
-                    "opponent_calculated_score": opponent_calculated_score,  # From individual player points
-                    "opponent_scoring_calculated": opponent_scoring_calculated,  # NEW: Using league scoring rules
+                    "opponent_score": round(opponent_score, 2),
                     "opponent_projected_score": opponent_team.get("projected_score"),
                     "opponent_team_logo": opponent_team.get("logo"),
                     "opponent_roster": opponent_roster,
                 })
                 
                 # Calculate score differential
-                if our_score is not None and opponent_team.get("score") is not None:
-                    self._attributes["score_differential"] = our_score - opponent_team.get("score")
+                self._attributes["score_differential"] = round(our_score - opponent_score, 2)
             
             # Determine winner info
             if winner_team_key:
@@ -1162,10 +1210,8 @@ class YahooFantasyMatchupSensor(Entity):
             self._attributes.update({
                 "our_starters_count": len(our_starters),
                 "our_bench_count": len(our_bench),
-                "our_starters_points": sum(p.get("points_total", 0) for p in our_starters),
-                "our_bench_points": sum(p.get("points_total", 0) for p in our_bench),
-                "our_starters_scoring_points": sum(p.get("calculated_points", 0) for p in our_starters),  # NEW
-                "our_bench_scoring_points": sum(p.get("calculated_points", 0) for p in our_bench),  # NEW
+                "our_starters_points": round(sum(p.get("points_total", 0) for p in our_starters), 2),
+                "our_bench_points": round(sum(p.get("points_total", 0) for p in our_bench), 2),
             })
             
             if opponent_roster:
@@ -1175,37 +1221,13 @@ class YahooFantasyMatchupSensor(Entity):
                 self._attributes.update({
                     "opponent_starters_count": len(opp_starters),
                     "opponent_bench_count": len(opp_bench),
-                    "opponent_starters_points": sum(p.get("points_total", 0) for p in opp_starters),
-                    "opponent_bench_points": sum(p.get("points_total", 0) for p in opp_bench),
-                    "opponent_starters_scoring_points": sum(p.get("calculated_points", 0) for p in opp_starters),  # NEW
-                    "opponent_bench_scoring_points": sum(p.get("calculated_points", 0) for p in opp_bench),  # NEW
+                    "opponent_starters_points": round(sum(p.get("points_total", 0) for p in opp_starters), 2),
+                    "opponent_bench_points": round(sum(p.get("points_total", 0) for p in opp_bench), 2),
                 })
 
-            # Add league settings info to attributes for reference
-            if league_settings:
-                self._attributes["league_settings"] = {
-                    "league_info": league_settings.get("league_info", {}),
-                    "roster_positions": league_settings.get("roster_positions", []),
-                    "scoring_rules": {
-                        stat_id: {
-                            "modifier": modifier,
-                            "stat_name": league_settings.get("stat_categories", {}).get(stat_id, {}).get("name", f"Stat {stat_id}"),
-                            "display_name": league_settings.get("stat_categories", {}).get(stat_id, {}).get("display_name", f"Stat {stat_id}")
-                        }
-                        for stat_id, modifier in stat_modifiers.items()
-                    }
-                }
-
-            # Add stat categories info to attributes for reference
-            if stat_categories:
-                self._attributes["available_stat_categories"] = {
-                    stat_id: {
-                        "name": info["name"],
-                        "abbr": info.get("abbr"),
-                        "display_name": info.get("display_name")
-                    }
-                    for stat_id, info in stat_categories.items()
-                }
+            # Add league settings info to attributes for reference (simplified)
+            if league_settings and league_settings.get("league_info"):
+                self._attributes["league_info"] = league_settings.get("league_info", {})
 
             # Set entity picture to our team logo
             if our_team.get("logo"):
@@ -1213,24 +1235,18 @@ class YahooFantasyMatchupSensor(Entity):
 
             self._last_update = time.time()
             
-            # Enhanced logging with scoring information
-            our_points_info = f"{our_score}"
-            if our_calculated_score != our_score:
-                our_points_info += f" (calculated: {our_calculated_score:.2f})"
-            if our_scoring_calculated != our_score:
-                our_points_info += f" (league scoring: {our_scoring_calculated:.2f})"
-                
-            opp_points_info = "Unknown"
-            if opponent_team:
-                opp_points_info = f"{opponent_team.get('score', 'Unknown')}"
-                if opponent_calculated_score != opponent_team.get('score'):
-                    opp_points_info += f" (calculated: {opponent_calculated_score:.2f})"
-                if opponent_scoring_calculated != opponent_team.get('score'):
-                    opp_points_info += f" (league scoring: {opponent_scoring_calculated:.2f})"
+            # Clean logging - just the essential info
+            opponent_name = opponent_team.get("name", "Unknown") if opponent_team else "Unknown"
+            opponent_score_display = round(opponent_score, 2) if opponent_team else "Unknown"
             
-            _LOGGER.info(f"Updated matchup with league scoring: {our_team.get('name')} ({our_points_info}) vs {opponent_team.get('name') if opponent_team else 'Unknown'} ({opp_points_info}). Scoring rules: {len(stat_modifiers)}")
+            _LOGGER.info(f"Updated matchup: {our_team.get('name')} ({our_score}) vs {opponent_name} ({opponent_score_display})")
 
         except Exception as e:
             _LOGGER.error(f"Error updating Yahoo Fantasy matchup sensor: {e}")
             self._state = "error"
-            self._attributes = {"error": str(e)}
+            self._attributes = {
+                "league_id": self._league_id,
+                "team_id": self._team_id,
+                "error": str(e),
+                "status": "error"
+            }
