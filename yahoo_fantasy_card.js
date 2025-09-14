@@ -48,6 +48,320 @@ class YahooFantasyMatchupCard extends HTMLElement {
     }
   }
 
+  showPlayerPopup(playerId, playerName, position, team, uniformNumber, points, imageUrl, stats) {
+    // Close any existing popup
+    this.closePlayerPopup();
+    
+    // Create popup element
+    const popup = document.createElement('div');
+    popup.className = 'player-popup-overlay';
+    popup.innerHTML = `
+      <div class="player-popup">
+        <div class="player-popup-header">
+          <div class="player-popup-image">
+            ${imageUrl && !imageUrl.includes('blank_player') ? 
+              `<img src="${imageUrl}" alt="${playerName}" loading="lazy">` : 
+              '<div class="player-placeholder">👤</div>'
+            }
+          </div>
+          <div class="player-popup-info">
+            <h3 class="player-popup-name">${playerName}</h3>
+            <div class="player-popup-details">
+              <span class="player-popup-position">${position}</span>
+              <span class="player-popup-team">${team}</span>
+              ${uniformNumber ? `<span class="player-popup-number">#${uniformNumber}</span>` : ''}
+            </div>
+            <div class="player-popup-points">
+              <strong>${points} points</strong>
+            </div>
+          </div>
+          <button class="player-popup-close">×</button>
+        </div>
+        <div class="player-popup-stats">
+          <h4>Player Stats</h4>
+          <div class="stats-grid">
+            ${this.renderPlayerStats(stats)}
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Add styles to the popup (since it's going in document.body, it needs its own styles)
+    const popupStyles = document.createElement('style');
+    popupStyles.textContent = `
+      .player-popup-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        box-sizing: border-box;
+      }
+      .player-popup {
+        background: var(--card-background-color, white);
+        color: var(--primary-text-color, #333);
+        border-radius: var(--card-border-radius, 12px);
+        box-shadow: var(--card-box-shadow, 0 8px 32px rgba(0,0,0,0.3));
+        max-width: 500px;
+        width: 100%;
+        max-height: 80vh;
+        overflow-y: auto;
+        animation: popupSlideIn 0.3s ease-out;
+      }
+      @keyframes popupSlideIn {
+        from {
+          opacity: 0;
+          transform: scale(0.8) translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+        }
+      }
+      .player-popup-header {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 20px 20px 16px;
+        border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        position: relative;
+      }
+      .player-popup-image {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        overflow: hidden;
+        background: var(--divider-color, #e0e0e0);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .player-popup-image img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .player-popup-image .player-placeholder {
+        font-size: 32px;
+        color: var(--secondary-text-color, #666);
+      }
+      .player-popup-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .player-popup-name {
+        font-size: 24px;
+        font-weight: bold;
+        color: var(--primary-text-color, #333);
+        margin: 0 0 8px 0;
+        line-height: 1.2;
+      }
+      .player-popup-details {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .player-popup-position {
+        background: var(--accent-color, #2196F3);
+        color: var(--text-accent-color, white);
+        padding: 4px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+      }
+      .player-popup-team {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--primary-text-color, #333);
+      }
+      .player-popup-number {
+        font-size: 12px;
+        color: var(--secondary-text-color, #666);
+        background: var(--secondary-background-color, #f0f0f0);
+        padding: 2px 6px;
+        border-radius: 8px;
+      }
+      .player-popup-points {
+        font-size: 18px;
+        color: var(--accent-color, #2196F3);
+        font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
+      }
+      .player-popup-close {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        background: none;
+        border: none;
+        font-size: 24px;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: var(--secondary-text-color, #666);
+        transition: all 0.2s ease;
+      }
+      .player-popup-close:hover {
+        background: var(--secondary-background-color, #f0f0f0);
+        color: var(--primary-text-color, #333);
+      }
+      .player-popup-stats {
+        padding: 20px;
+      }
+      .player-popup-stats h4 {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--primary-text-color, #333);
+        margin: 0 0 16px 0;
+      }
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 12px;
+      }
+      .stat-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        background: var(--secondary-background-color, #f8f9fa);
+        border-radius: 6px;
+      }
+      .stat-label {
+        font-size: 12px;
+        color: var(--secondary-text-color, #666);
+        font-weight: 500;
+      }
+      .stat-value {
+        font-size: 14px;
+        font-weight: bold;
+        color: var(--primary-text-color, #333);
+        font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
+      }
+      .no-stats {
+        text-align: center;
+        color: var(--secondary-text-color, #666);
+        font-style: italic;
+        grid-column: 1 / -1;
+        padding: 20px;
+      }
+      @media (max-width: 600px) {
+        .player-popup {
+          max-width: 95vw;
+          margin: 10px;
+        }
+        .player-popup-header {
+          padding: 16px;
+          flex-direction: column;
+          text-align: center;
+          gap: 12px;
+        }
+        .player-popup-image {
+          width: 60px;
+          height: 60px;
+          align-self: center;
+        }
+        .player-popup-name {
+          font-size: 20px;
+        }
+        .player-popup-details {
+          justify-content: center;
+        }
+        .player-popup-stats {
+          padding: 16px;
+        }
+        .stats-grid {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+      }
+    `;
+    
+    // Store references to the popup and styles so we can clean them up later
+    this._currentPopup = popup;
+    this._currentPopupStyles = popupStyles;
+    
+    // Add styles and popup to document
+    document.head.appendChild(popupStyles);
+    document.body.appendChild(popup);
+    
+    // Set up event listeners
+    const closeButton = popup.querySelector('.player-popup-close');
+    closeButton.addEventListener('click', () => this.closePlayerPopup());
+    
+    // Add click outside to close
+    popup.addEventListener('click', (e) => {
+      if (e.target === popup) {
+        this.closePlayerPopup();
+      }
+    });
+    
+    // Add escape key listener
+    this._escapeHandler = (e) => {
+      if (e.key === 'Escape') {
+        this.closePlayerPopup();
+      }
+    };
+    document.addEventListener('keydown', this._escapeHandler);
+  }
+  
+  closePlayerPopup() {
+    // Remove popup from document.body
+    if (this._currentPopup && this._currentPopup.parentNode) {
+      this._currentPopup.parentNode.removeChild(this._currentPopup);
+    }
+    
+    // Remove styles from document.head
+    if (this._currentPopupStyles && this._currentPopupStyles.parentNode) {
+      this._currentPopupStyles.parentNode.removeChild(this._currentPopupStyles);
+    }
+    
+    // Clean up references
+    this._currentPopup = null;
+    this._currentPopupStyles = null;
+    
+    // Remove escape key listener
+    if (this._escapeHandler) {
+      document.removeEventListener('keydown', this._escapeHandler);
+      this._escapeHandler = null;
+    }
+  }
+  
+  // Clean up popups when the element is removed from DOM
+  disconnectedCallback() {
+    this.closePlayerPopup();
+  }
+  
+  renderPlayerStats(stats) {
+    if (!stats || typeof stats !== 'object' || Object.keys(stats).length === 0) {
+      return '<div class="no-stats">No stats available</div>';
+    }
+    
+    let statsHtml = '';
+    for (const [key, value] of Object.entries(stats)) {
+      const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+      statsHtml += `
+        <div class="stat-item">
+          <span class="stat-label">${formattedKey}:</span>
+          <span class="stat-value">${value}</span>
+        </div>
+      `;
+    }
+    
+    return statsHtml;
+  }
+
   renderPlayer(player, isOur = true) {
     const playerImg = player.image_url && !player.image_url.includes('blank_player') 
       ? `<img src="${player.image_url}" alt="${player.name}" loading="lazy">` 
@@ -58,7 +372,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const formattedName = this.formatPlayerName(player.name);
     
     return `
-      <div class="player ${isOur ? 'our-player' : 'opp-player'}">
+      <div class="player ${isOur ? 'our-player' : 'opp-player'}" onclick="this.getRootNode().host.showPlayerPopup('${player.player_id || ''}', '${player.name?.replace(/'/g, "\\'")}', '${player.position}', '${player.team}', '${player.uniform_number || ''}', '${pointsDisplay}', '${player.image_url || ''}', ${JSON.stringify(player.stats || {}).replace(/"/g, '&quot;')})">
         <div class="player-image">
           ${playerImg}
         </div>
@@ -347,6 +661,12 @@ class YahooFantasyMatchupCard extends HTMLElement {
           max-width: 280px;
           width: 100%;
           overflow: hidden;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        .player:hover {
+          background: var(--secondary-background-color, #f0f0f0);
+          transform: scale(1.02);
         }
         .our-player {
           flex-direction: row;
@@ -604,7 +924,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.2.0                ',
+  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.2.1                ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
