@@ -344,23 +344,37 @@ class YahooFantasyMatchupCard extends HTMLElement {
   }
   
   renderPlayerStats(stats) {
-    if (!stats || typeof stats !== 'object' || Object.keys(stats).length === 0) {
-      return '<div class="no-stats">No stats available</div>';
+      if (!stats || typeof stats !== 'object' || Object.keys(stats).length === 0) {
+        return '<div class="no-stats">No stats available</div>';
+      }
+      
+      let statsHtml = '';
+      for (const [key, value] of Object.entries(stats)) {
+        const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+        
+        // Handle the new stat structure with value, fantasy_points, and display
+        let displayValue;
+        let fantasyPoints = null;
+        
+        if (typeof value === 'object' && value !== null) {
+          // New format: {value: "44", fantasy_points: 4.4, display: "44 (4.4 pts)"}
+          displayValue = value.display || value.value || 'N/A';
+          fantasyPoints = value.fantasy_points;
+        } else {
+          // Fallback for old format or simple values
+          displayValue = value;
+        }
+        
+        statsHtml += `
+          <div class="stat-item">
+            <span class="stat-label">${formattedKey}:</span>
+            <span class="stat-value">${displayValue}</span>
+          </div>
+        `;
+      }
+      
+      return statsHtml;
     }
-    
-    let statsHtml = '';
-    for (const [key, value] of Object.entries(stats)) {
-      const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
-      statsHtml += `
-        <div class="stat-item">
-          <span class="stat-label">${formattedKey}:</span>
-          <span class="stat-value">${value}</span>
-        </div>
-      `;
-    }
-    
-    return statsHtml;
-  }
 
   renderPlayer(player, isOur = true) {
     const playerImg = player.image_url && !player.image_url.includes('blank_player') 
