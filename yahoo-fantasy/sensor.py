@@ -499,6 +499,63 @@ class YahooFantasyMatchupSensor(Entity):
         
         return round(projected_points, 2)
 
+    def _get_stat_fantasy_points(self, stat_id, stat_value, stat_modifiers):
+        """Calculate fantasy points for a single stat."""
+        if not stat_modifiers or stat_id not in stat_modifiers:
+            return 0.0
+        
+        try:
+            stat_val = float(stat_value)
+            modifier = float(stat_modifiers[stat_id])
+            return round(stat_val * modifier, 2)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _format_stat_display(self, stat_name, stat_value, fantasy_points, include_zero_points=False):
+        """Format stat display with optional fantasy points."""
+        if fantasy_points != 0.0:
+            return f"{stat_value} ({fantasy_points} pts)"
+        elif include_zero_points:
+            return f"{stat_value} (0.0 pts)"
+        else:
+            return str(stat_value)
+
+    def _get_player_stat_breakdown(self, player_stats, stat_categories, stat_modifiers):
+        """Get a detailed breakdown of a player's stats with individual fantasy points."""
+        if not player_stats or not player_stats.get("stats_by_id"):
+            return {}
+        
+        breakdown = {}
+        stats_by_id = player_stats.get("stats_by_id", {})
+        
+        for stat_id, value in stats_by_id.items():
+            if stat_id == "0":  # Skip total points
+                continue
+                
+            try:
+                if float(value) == 0:  # Skip zero stats
+                    continue
+            except (ValueError, TypeError):
+                pass
+            
+            # Get stat name
+            if stat_id in stat_categories:
+                stat_info = stat_categories[stat_id]
+                display_name = stat_info.get("name") or stat_info.get("display_name") or f"Stat {stat_id}"
+            else:
+                display_name = f"Stat {stat_id}"
+            
+            # Calculate fantasy points
+            fantasy_points = self._get_stat_fantasy_points(stat_id, value, stat_modifiers)
+            
+            breakdown[display_name] = {
+                "raw_value": value,
+                "fantasy_points": fantasy_points,
+                "formatted": self._format_stat_display(display_name, value, fantasy_points)
+            }
+        
+        return breakdown
+
     def _get_current_week(self):
         """Fetch current week from league data."""
         try:
@@ -676,8 +733,8 @@ class YahooFantasyMatchupSensor(Entity):
         
         return player_stats
 
-    def _convert_stats_with_names(self, stats_by_id, stat_categories):
-        """Convert stat IDs to human-readable names with simple value display."""
+    def _convert_stats_with_names(self, stats_by_id, stat_categories, stat_modifiers=None):
+        """Convert stat IDs to human-readable names with values and fantasy points."""
         named_stats = {}
         
         try:
@@ -702,8 +759,32 @@ class YahooFantasyMatchupSensor(Entity):
                     # Fallback for unknown stat IDs
                     display_name = f"Stat {stat_id}"
                 
-                # Store as simple name: value format
-                named_stats[display_name] = value
+                # Calculate fantasy points for this individual stat if modifiers are available
+                fantasy_points = 0.0
+                if stat_modifiers and stat_id in stat_modifiers:
+                    try:
+                        stat_val = float(value)
+                        modifier = float(stat_modifiers[stat_id])
+                        fantasy_points = round(stat_val * modifier, 2)
+                    except (ValueError, TypeError):
+                        fantasy_points = 0.0
+                
+                # Create enhanced stat entry with both value and fantasy points
+                if fantasy_points != 0.0:
+                    # Format: "44 | 4.4 pts" 
+                    named_stats[display_name] = {
+                        "value": value,
+                        "fantasy_points": fantasy_points,
+                        "display": f"{value} | {fantasy_points} pts"
+                    }
+                else:
+                    # If no fantasy points calculation available, just show the value
+                    named_stats[display_name] = {
+                        "value": value,
+                        "fantasy_points": 0.0,
+                        "display": str(value)
+                    }
+                    
         except Exception as e:
             _LOGGER.error(f"Error in _convert_stats_with_names: {e}")
         
@@ -827,14 +908,16 @@ class YahooFantasyMatchupSensor(Entity):
                             if stat_categories and stats_info.get("stats_by_id"):
                                 player["stats"] = self._convert_stats_with_names(
                                     stats_info.get("stats_by_id"), 
-                                    stat_categories
+                                    stat_categories,
+                                    stat_modifiers
                                 )
                             else:
                                 # Fallback - only show non-zero stats
                                 stats_by_id = stats_info.get("stats_by_id", {})
                                 non_zero_stats = {k: v for k, v in stats_by_id.items() 
                                                 if k != "0" and v != "0" and v != 0}
-                                player["stats"] = {f"Stat {k}": v for k, v in non_zero_stats.items()}
+                                player["stats"] = {f"Stat {k}": {"value": v, "fantasy_points": 0.0, "display": str(v)} 
+                                                for k, v in non_zero_stats.items()}
                         except Exception as e:
                             _LOGGER.debug(f"Error processing stats for player {player_id}: {e}")
                             player["points_total"] = 0.0
