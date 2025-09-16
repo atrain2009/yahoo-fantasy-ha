@@ -77,3 +77,7 @@ You can configure the card like this:
 type: custom:yahoo-fantasy-matchup-card
 entity: sensor.yahoo_fantasy_matchup
 ```
+You can also optionally show or hide both teams' bench players by adding this to your card configuration:
+```
+show_bench: true
+```
