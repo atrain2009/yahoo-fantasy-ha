@@ -376,7 +376,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
       return statsHtml;
     }
 
-  renderPlayer(player, isOur = true) {
+  renderPlayer(player, isOur = true, isBench = false) {
     const playerImg = player.image_url && !player.image_url.includes('blank_player') 
       ? `<img src="${player.image_url}" alt="${player.name}" loading="lazy">` 
       : '<div class="player-placeholder">👤</div>';
@@ -385,15 +385,17 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const pointsDisplay = typeof points === 'number' ? points.toFixed(2) : '0.0';
     const formattedName = this.formatPlayerName(player.name);
     
+    const benchClass = isBench ? ' bench-player' : '';
+    
     return `
-      <div class="player ${isOur ? 'our-player' : 'opp-player'}" onclick="this.getRootNode().host.showPlayerPopup('${player.player_id || ''}', '${player.name?.replace(/'/g, "\\'")}', '${player.position}', '${player.team}', '${player.uniform_number || ''}', '${pointsDisplay}', '${player.image_url || ''}', ${JSON.stringify(player.stats || {}).replace(/"/g, '&quot;')})">
+      <div class="player ${isOur ? 'our-player' : 'opp-player'}${benchClass}" onclick="this.getRootNode().host.showPlayerPopup('${player.player_id || ''}', '${player.name?.replace(/'/g, "\\'")}', '${player.position}', '${player.team}', '${player.uniform_number || ''}', '${pointsDisplay}', '${player.image_url || ''}', ${JSON.stringify(player.stats || {}).replace(/"/g, '&quot;')})">
         <div class="player-image">
           ${playerImg}
         </div>
         <div class="player-info">
           <div class="player-name">${formattedName}</div>
           <div class="player-details">
-            <span class="player-team">${player.team || ''}</span>
+            <span class="player-team">${player.team || ''} – ${player.position}</span>
             ${player.uniform_number ? `<span class="player-number">#${player.uniform_number}</span>` : ''}
           </div>
         </div>
@@ -403,6 +405,65 @@ class YahooFantasyMatchupCard extends HTMLElement {
       </div>
     `;
   }
+
+renderBenchSection(title, players, isOur = true) {
+  if (!players || players.length === 0) {
+    return '';
+  }
+
+  const benchPlayers = players
+    .filter(player => !player.is_starting)
+    .sort((a, b) => this.getPositionOrder(a.position) - this.getPositionOrder(b.position));
+
+  if (benchPlayers.length === 0) {
+    return '';
+  }
+
+  return `
+    <div class="bench-section">
+      <div class="bench-title">${title}</div>
+      <div class="bench-players">
+        ${benchPlayers.map(player => `
+          <div class="bench-lineup-row">
+            <div class="bench-player-cell our-side">
+              ${isOur ? this.renderPlayer(player, isOur, true) : '<div class="empty-slot">-</div>'}
+            </div>
+            <div class="bench-position-cell">BN</div>
+            <div class="bench-player-cell opp-side">
+              ${!isOur ? this.renderPlayer(player, isOur, true) : '<div class="empty-slot">-</div>'}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+renderCombinedBenchSection(ourRoster, oppRoster) {
+  const ourBench = ourRoster.filter(player => !player.is_starting);
+  const oppBench = oppRoster.filter(player => !player.is_starting);
+  const maxBench = Math.max(ourBench.length, oppBench.length);
+  
+  let benchRows = '';
+  for (let i = 0; i < maxBench; i++) {
+    const ourPlayer = ourBench[i];
+    const oppPlayer = oppBench[i];
+    
+    benchRows += `
+      <div class="lineup-row">
+        <div class="player-cell our-side">
+          ${ourPlayer ? this.renderPlayer(ourPlayer, true, true) : '<div class="empty-slot">-</div>'}
+        </div>
+        <div class="position-cell">BN</div>
+        <div class="player-cell opp-side">
+          ${oppPlayer ? this.renderPlayer(oppPlayer, false, true) : '<div class="empty-slot">-</div>'}
+        </div>
+      </div>
+    `;
+  }
+  
+  return benchRows;
+}
 
   render() {
     if (!this._hass || !this.config.entity) return;
@@ -422,11 +483,10 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const oppScore = attrs.opponent_score || 0;
     const ourProjected = attrs.our_projected_score || 0;
     const oppProjected = attrs.opponent_projected_score || 0;
-    const ourCalculated = attrs.our_calculated_score || 0;
-    const oppCalculated = attrs.opponent_calculated_score || 0;
     const week = attrs.week || '?';
     const status = attrs.status || 'unknown';
     const winner = attrs.winner || 'tbd';
+    const showBench = this.config.show_bench || false;
 
     // Filter starting lineups from roster data
     const ourRoster = attrs.our_roster || [];
@@ -486,9 +546,18 @@ class YahooFantasyMatchupCard extends HTMLElement {
       `;
     }
 
-    // Show calculated vs official scores if they differ
-    const showCalculatedOur = Math.abs(ourScore - ourCalculated) > 0.1;
-    const showCalculatedOpp = Math.abs(oppScore - oppCalculated) > 0.1;
+    // Generate bench sections if enabled
+    const benchSections = showBench ? `
+      <div class="bench-container">
+        <div class="bench-title-main">Bench Players</div>
+        <div class="bench-header">
+          <div>Your Bench</div>
+          <div>POS</div>
+          <div>Opponent Bench</div>
+        </div>
+        ${this.renderCombinedBenchSection(ourRoster, oppRoster)}
+      </div>
+    ` : '';
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -496,7 +565,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           background: var(--card-background-color, white);
           border-radius: var(--card-border-radius, 12px);
           box-shadow: var(--card-box-shadow, 0 2px 8px rgba(0,0,0,0.1));
-          padding: 12px;
+          padding: 12px 0px 0px 0px;
           font-family: var(--primary-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
         }
         .header {
@@ -516,99 +585,62 @@ class YahooFantasyMatchupCard extends HTMLElement {
         }
         .matchup-summary {
           display: grid;
-          grid-template-columns: 1fr 40px 1fr;
-          align-items: center;
-          gap: 16px;
-          margin: 20px 0;
-          padding: 16px;
-          border-radius: 8px;
-          background: var(--secondary-background-color, #f8f9fa);
-        }
-        .team-summary {
+          grid-template-columns: 1fr auto 1fr; /* left | spacer | right */
           text-align: center;
-          padding: 12px;
-          border-radius: 6px;
-          transition: all 0.3s ease;
-          width: 100%;
-          background: transparent;
-          border: none;
+          gap: 4px 16px;
         }
-        .team-winner {
-          background: transparent;
-          border: none;
+
+        .matchup-row {
+          display: contents; /* allows children to participate in parent grid */
         }
-        .team-loser {
-          background: transparent;
-          border: none;
-        }
-        .team-tie {
-          background: transparent;
-          border: none;
-        }
-        .team-neutral {
-          background: transparent;
-          border: none;
-        }
+
         .team-logo {
           width: 40px;
           height: 40px;
+          margin: 0 auto;
           border-radius: 50%;
-          margin: 0 auto 8px;
-          background: var(--divider-color, #e0e0e0);
+          overflow: hidden;
           display: flex;
           align-items: center;
           justify-content: center;
-          overflow: hidden;
         }
+
         .team-logo img {
           width: 100%;
           height: 100%;
           object-fit: cover;
         }
-        .team-logo-placeholder {
-          font-size: 16px;
-          font-weight: bold;
-          color: var(--secondary-text-color, #666);
-        }
+
         .team-name {
-          font-size: 12px;
           font-weight: 600;
-          color: var(--primary-text-color, #333);
-          margin-bottom: 4px;
+          font-size: 12px;
+          word-break: break-word; /* allows wrapping */
         }
+
         .manager-name {
           font-size: 10px;
           color: var(--secondary-text-color, #666);
-          margin-bottom: 6px;
         }
+
         .score {
           font-size: 20px;
+          font-family: monospace;
           font-weight: bold;
-          color: var(--primary-text-color, #333);
-          margin: 4px 0;
-          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
         }
-        .calculated-score {
-          font-size: 10px;
-          color: var(--secondary-text-color, #666);
-          font-style: italic;
-          margin-bottom: 4px;
-          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
-        }
+
         .projected {
           font-size: 10px;
+          font-family: monospace;
           color: var(--secondary-text-color, #666);
-          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
         }
+
         .vs {
-          font-size: 16px;
-          font-weight: bold;
-          color: var(--secondary-text-color, #666);
-          text-align: center;
-          width: 100%;
+          align-self: center;
         }
+
         .lineup-section {
           margin-top: 20px;
+          padding: 0 8px;
         }
         .lineup-title {
           text-align: center;
@@ -681,6 +713,14 @@ class YahooFantasyMatchupCard extends HTMLElement {
         .player:hover {
           background: var(--secondary-background-color, #f0f0f0);
           transform: scale(1.02);
+        }
+        .bench-player {
+          opacity: 0.8;
+          border-radius: 4px;
+          padding: 4px;
+        }
+        .bench-player:hover {
+          opacity: 1;
         }
         .our-player {
           flex-direction: row;
@@ -803,6 +843,133 @@ class YahooFantasyMatchupCard extends HTMLElement {
           background: rgba(158, 158, 158, 0.1);
           color: #9e9e9e;
         }
+        
+        /* Bench Styles */
+        .bench-container {
+          margin-top: 24px;
+          border-top: 2px solid var(--divider-color, #e0e0e0);
+          padding: 16px 8px 0;
+        }
+        .bench-title-main {
+          text-align: center;
+          font-size: 16px;
+          font-weight: 600;
+          margin-bottom: 16px;
+          color: var(--primary-text-color, #333);
+        }
+        .bench-comparison {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 0px;
+        }
+        .bench-section {
+          margin-top: 20px;
+        }
+        .bench-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: var(--primary-text-color, #333);
+          margin-bottom: 4px;
+          text-align: center;
+          padding-bottom: 4px;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .bench-header {
+          display: grid;
+          grid-template-columns: 1fr 60px 1fr;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+          padding: 8px 4px;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--secondary-text-color, #666);
+          text-align: center;
+        }
+
+        .bench-lineup-row {
+          display: grid;
+          grid-template-columns: 1fr 60px 1fr;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+          padding: 8px 4px;
+          border-radius: 6px;
+          transition: background-color 0.2s ease;
+        }
+
+        .bench-position-cell {
+          font-size: 11px;
+          font-weight: 700;
+          text-align: center;
+          color: var(--primary-text-color, #333);
+          padding: 6px 4px;
+        }
+        .bench-players {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .bench-row {
+          display: flex;
+          align-items: center;
+          gap: 0px;
+          padding: 0px;
+          border-radius: 0px;
+          transition: background-color 0.2s ease;
+        }
+        .bench-row:hover {
+          background: var(--card-background-color, white);
+        }
+        .bench-position {
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--secondary-text-color, #666);
+          min-width: 24px;
+          text-align: center;
+          background: var(--card-background-color, white);
+          padding: 2px 3px;
+        }
+        .bench-player-cell {
+          min-height: 50px;
+          display: flex;
+          align-items: center;
+          width: 100%;
+          padding: 0 4px;
+        }
+        .bench-player-cell.our-side {
+          justify-content: flex-end;
+        }
+        .bench-player-cell.opp-side {
+          justify-content: flex-start;
+        }
+        .bench-player-cell .player {
+          max-width: none;
+          width: 100%;
+        }
+        .bench-player-cell .our-player {
+          flex-direction: row;
+          justify-content: flex-start;
+        }
+        .bench-player-cell .our-player .player-info {
+          text-align: left;
+          padding-right: 0;
+          padding-left: 4px;
+        }
+        .bench-player-cell .opp-player {
+          flex-direction: row;
+          justify-content: flex-start;
+        }
+        .bench-player-cell .opp-player .player-info {
+          text-align: left;
+          padding-right: 0;
+          padding-left: 4px;
+        }
+        .bench-player-cell .player-number {
+          margin-left: 4px;
+          margin-right: 0;
+        }
         @media (max-width: 600px) {
           .matchup-summary {
             grid-template-columns: 1fr auto 1fr;
@@ -860,6 +1027,20 @@ class YahooFantasyMatchupCard extends HTMLElement {
           .opp-player .player-info {
             padding-left: 2px;
           }
+          .bench-title-main {
+            font-size: 14px;
+          }
+          .bench-title {
+            font-size: 12px;
+          }
+          .bench-position {
+            min-width: 28px;
+            font-size: 9px;
+            padding: 3px 4px;
+          }
+          .bench-row {
+            gap: 2px;
+          }
         }
       </style>
       
@@ -870,36 +1051,42 @@ class YahooFantasyMatchupCard extends HTMLElement {
         </div>
         
         <div class="matchup-summary">
-          <div class="team-container">
-            <div class="team-summary ${ourTeamClass}">
-              <div class="team-logo">
-                ${ourLogo ? `<img src="${ourLogo}" alt="Team Logo">` : '<div class="team-logo-placeholder">🏈</div>'}
-              </div>
-              <div class="team-name">${attrs.our_team_name || 'My Team'}</div>
-              <div class="manager-name">${attrs.our_manager || 'Me'}</div>
-              <div class="score">${ourScore.toFixed(2)}</div>
-              ${showCalculatedOur ? `<div class="calculated-score">Calc: ${ourCalculated.toFixed(2)}</div>` : ''}
-              <div class="projected">Proj: ${ourProjected.toFixed(2)}</div>
-            </div>
-            ${winner === 'us' ? '<div class="winner-badge">👑</div>' : ''}
+          <!-- Logos row -->
+          <div class="matchup-row">
+            <div class="team-logo">${ourLogo ? `<img src="${ourLogo}">` : '🏈'}</div>
+            <div></div>
+            <div class="team-logo">${oppLogo ? `<img src="${oppLogo}">` : '🏈'}</div>
           </div>
-          
-          <div class="vs">VS</div>
-          
-          <div class="team-container">
-            <div class="team-summary ${oppTeamClass}">
-              <div class="team-logo">
-                ${oppLogo ? `<img src="${oppLogo}" alt="Team Logo">` : '<div class="team-logo-placeholder">🏈</div>'}
-              </div>
-              <div class="team-name">${attrs.opponent_team_name || 'Opponent'}</div>
-              <div class="manager-name">${attrs.opponent_manager || 'Unknown'}</div>
-              <div class="score">${oppScore.toFixed(2)}</div>
-              ${showCalculatedOpp ? `<div class="calculated-score">Calc: ${oppCalculated.toFixed(2)}</div>` : ''}
-              <div class="projected">Proj: ${oppProjected.toFixed(2)}</div>
-            </div>
-            ${winner === 'opponent' ? '<div class="winner-badge">👑</div>' : ''}
+
+          <!-- Team names row -->
+          <div class="matchup-row">
+            <div class="team-name">${attrs.our_team_name}</div>
+            <div class="vs">VS</div>
+            <div class="team-name">${attrs.opponent_team_name}</div>
+          </div>
+
+          <!-- Manager row -->
+          <div class="matchup-row">
+            <div class="manager-name">${attrs.our_manager}</div>
+            <div></div>
+            <div class="manager-name">${attrs.opponent_manager}</div>
+          </div>
+
+          <!-- Scores row -->
+          <div class="matchup-row">
+            <div class="score">${ourScore.toFixed(2)}</div>
+            <div></div>
+            <div class="score">${oppScore.toFixed(2)}</div>
+          </div>
+
+          <!-- Projected row -->
+          <div class="matchup-row">
+            <div class="projected">Proj: ${ourProjected.toFixed(2)}</div>
+            <div></div>
+            <div class="projected">Proj: ${oppProjected.toFixed(2)}</div>
           </div>
         </div>
+
         
         ${attrs.score_differential !== undefined ? `
           <div class="score-diff ${attrs.score_differential > 0 ? 'positive' : attrs.score_differential < 0 ? 'negative' : 'zero'}">
@@ -918,12 +1105,14 @@ class YahooFantasyMatchupCard extends HTMLElement {
             ${lineupRows}
           </div>
         ` : ''}
+        
+        ${benchSections}
       </div>
     `;
   }
 
   getCardSize() {
-    return 6;
+    return this.config.show_bench ? 8 : 6;
   }
 }
 
@@ -934,11 +1123,11 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'yahoo-fantasy-matchup-card',
   name: 'Yahoo Fantasy Matchup Card',
-  description: 'A card to display Yahoo Fantasy Football matchup information with starting lineups and player points',
+  description: 'A card to display Yahoo Fantasy Football matchup information with starting lineups and player points. Configure with show_bench: true to display bench players.',
 });
 
 console.info(
-  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.2.1                ',
+  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.3.0                ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
