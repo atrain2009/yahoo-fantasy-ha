@@ -35,24 +35,19 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const firstName = parts[0];
     const suffixes = ['Jr.', 'Jr', 'Sr.', 'Sr', 'II', 'III', 'IV', 'V'];
     
-    // Check if the last part is a suffix
     const lastPart = parts[parts.length - 1];
     if (suffixes.includes(lastPart) && parts.length >= 3) {
-      // Use the second-to-last part as the last name
       const lastName = parts[parts.length - 2];
       return `${firstName.charAt(0)}. ${lastName} ${lastPart}`;
     } else {
-      // Normal case - use the last part as the last name
       const lastName = parts[parts.length - 1];
       return `${firstName.charAt(0)}. ${lastName}`;
     }
   }
 
   showPlayerPopup(playerId, playerName, position, team, uniformNumber, points, imageUrl, stats) {
-    // Close any existing popup
     this.closePlayerPopup();
     
-    // Create popup element
     const popup = document.createElement('div');
     popup.className = 'player-popup-overlay';
     popup.innerHTML = `
@@ -86,7 +81,6 @@ class YahooFantasyMatchupCard extends HTMLElement {
       </div>
     `;
     
-    // Add styles to the popup (since it's going in document.body, it needs its own styles)
     const popupStyles = document.createElement('style');
     popupStyles.textContent = `
       .player-popup-overlay {
@@ -288,26 +282,21 @@ class YahooFantasyMatchupCard extends HTMLElement {
       }
     `;
     
-    // Store references to the popup and styles so we can clean them up later
     this._currentPopup = popup;
     this._currentPopupStyles = popupStyles;
     
-    // Add styles and popup to document
     document.head.appendChild(popupStyles);
     document.body.appendChild(popup);
     
-    // Set up event listeners
     const closeButton = popup.querySelector('.player-popup-close');
     closeButton.addEventListener('click', () => this.closePlayerPopup());
     
-    // Add click outside to close
     popup.addEventListener('click', (e) => {
       if (e.target === popup) {
         this.closePlayerPopup();
       }
     });
     
-    // Add escape key listener
     this._escapeHandler = (e) => {
       if (e.key === 'Escape') {
         this.closePlayerPopup();
@@ -317,64 +306,53 @@ class YahooFantasyMatchupCard extends HTMLElement {
   }
   
   closePlayerPopup() {
-    // Remove popup from document.body
     if (this._currentPopup && this._currentPopup.parentNode) {
       this._currentPopup.parentNode.removeChild(this._currentPopup);
     }
     
-    // Remove styles from document.head
     if (this._currentPopupStyles && this._currentPopupStyles.parentNode) {
       this._currentPopupStyles.parentNode.removeChild(this._currentPopupStyles);
     }
     
-    // Clean up references
     this._currentPopup = null;
     this._currentPopupStyles = null;
     
-    // Remove escape key listener
     if (this._escapeHandler) {
       document.removeEventListener('keydown', this._escapeHandler);
       this._escapeHandler = null;
     }
   }
   
-  // Clean up popups when the element is removed from DOM
   disconnectedCallback() {
     this.closePlayerPopup();
   }
   
   renderPlayerStats(stats) {
-      if (!stats || typeof stats !== 'object' || Object.keys(stats).length === 0) {
-        return '<div class="no-stats">No stats available</div>';
-      }
-      
-      let statsHtml = '';
-      for (const [key, value] of Object.entries(stats)) {
-        const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
-        
-        // Handle the new stat structure with value, fantasy_points, and display
-        let displayValue;
-        let fantasyPoints = null;
-        
-        if (typeof value === 'object' && value !== null) {
-          // New format: {value: "44", fantasy_points: 4.4, display: "44 (4.4 pts)"}
-          displayValue = value.display || value.value || 'N/A';
-          fantasyPoints = value.fantasy_points;
-        } else {
-          // Fallback for old format or simple values
-          displayValue = value;
-        }
-        
-        statsHtml += `
-          <div class="stat-item">
-            <span class="stat-label">${formattedKey}:</span>
-            <span class="stat-value">${displayValue}</span>
-          </div>
-        `;
-      }
-      
-      return statsHtml;
+    if (!stats || typeof stats !== 'object' || Object.keys(stats).length === 0) {
+      return '<div class="no-stats">No stats available</div>';
     }
+    
+    let statsHtml = '';
+    for (const [key, value] of Object.entries(stats)) {
+      const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+      
+      let displayValue;
+      if (typeof value === 'object' && value !== null) {
+        displayValue = value.display || value.value || 'N/A';
+      } else {
+        displayValue = value;
+      }
+      
+      statsHtml += `
+        <div class="stat-item">
+          <span class="stat-label">${formattedKey}:</span>
+          <span class="stat-value">${displayValue}</span>
+        </div>
+      `;
+    }
+    
+    return statsHtml;
+  }
 
   renderPlayer(player, isOur = true, isBench = false) {
     const playerImg = player.image_url && !player.image_url.includes('blank_player') 
@@ -387,83 +365,65 @@ class YahooFantasyMatchupCard extends HTMLElement {
     
     const benchClass = isBench ? ' bench-player' : '';
     
-    return `
-      <div class="player ${isOur ? 'our-player' : 'opp-player'}${benchClass}" onclick="this.getRootNode().host.showPlayerPopup('${player.player_id || ''}', '${player.name?.replace(/'/g, "\\'")}', '${player.position}', '${player.team}', '${player.uniform_number || ''}', '${pointsDisplay}', '${player.image_url || ''}', ${JSON.stringify(player.stats || {}).replace(/"/g, '&quot;')})">
-        <div class="player-image">
+    return {
+      image: `
+        <div class="player-image" onclick="this.getRootNode().host.showPlayerPopup('${player.player_id || ''}', '${player.name?.replace(/'/g, "\\'")}', '${player.position}', '${player.team}', '${player.uniform_number || ''}', '${pointsDisplay}', '${player.image_url || ''}', ${JSON.stringify(player.stats || {}).replace(/"/g, '&quot;')})">
           ${playerImg}
         </div>
-        <div class="player-info">
+      `,
+      info: `
+        <div class="player-info ${isOur ? 'our-side' : 'opp-side'}${benchClass}" onclick="this.getRootNode().host.showPlayerPopup('${player.player_id || ''}', '${player.name?.replace(/'/g, "\\'")}', '${player.position}', '${player.team}', '${player.uniform_number || ''}', '${pointsDisplay}', '${player.image_url || ''}', ${JSON.stringify(player.stats || {}).replace(/"/g, '&quot;')})">
           <div class="player-name">${formattedName}</div>
           <div class="player-details">
-            <span class="player-team">${player.team || ''} – ${player.position}</span>
+            <span class="player-team">${player.team || ''} — ${player.position}</span>
             ${player.uniform_number ? `<span class="player-number">#${player.uniform_number}</span>` : ''}
           </div>
         </div>
-        <div class="player-points">
-          ${pointsDisplay}
-        </div>
-      </div>
-    `;
+      `,
+      points: pointsDisplay
+    };
   }
 
-renderBenchSection(title, players, isOur = true) {
-  if (!players || players.length === 0) {
-    return '';
-  }
-
-  const benchPlayers = players
-    .filter(player => !player.is_starting)
-    .sort((a, b) => this.getPositionOrder(a.position) - this.getPositionOrder(b.position));
-
-  if (benchPlayers.length === 0) {
-    return '';
-  }
-
-  return `
-    <div class="bench-section">
-      <div class="bench-title">${title}</div>
-      <div class="bench-players">
-        ${benchPlayers.map(player => `
-          <div class="bench-lineup-row">
-            <div class="bench-player-cell our-side">
-              ${isOur ? this.renderPlayer(player, isOur, true) : '<div class="empty-slot">-</div>'}
-            </div>
-            <div class="bench-position-cell">BN</div>
-            <div class="bench-player-cell opp-side">
-              ${!isOur ? this.renderPlayer(player, isOur, true) : '<div class="empty-slot">-</div>'}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-
-renderCombinedBenchSection(ourRoster, oppRoster) {
-  const ourBench = ourRoster.filter(player => !player.is_starting);
-  const oppBench = oppRoster.filter(player => !player.is_starting);
-  const maxBench = Math.max(ourBench.length, oppBench.length);
-  
-  let benchRows = '';
-  for (let i = 0; i < maxBench; i++) {
-    const ourPlayer = ourBench[i];
-    const oppPlayer = oppBench[i];
+  renderCombinedBenchSection(ourRoster, oppRoster) {
+    const ourBench = ourRoster.filter(player => !player.is_starting);
+    const oppBench = oppRoster.filter(player => !player.is_starting);
+    const maxBench = Math.max(ourBench.length, oppBench.length);
     
-    benchRows += `
-      <div class="lineup-row">
-        <div class="player-cell our-side">
-          ${ourPlayer ? this.renderPlayer(ourPlayer, true, true) : '<div class="empty-slot">-</div>'}
+    let benchRows = '';
+    for (let i = 0; i < maxBench; i++) {
+      const ourPlayer = ourBench[i];
+      const oppPlayer = oppBench[i];
+      
+      const ourPlayerData = ourPlayer ? this.renderPlayer(ourPlayer, true, true) : null;
+      const oppPlayerData = oppPlayer ? this.renderPlayer(oppPlayer, false, true) : null;
+      
+      benchRows += `
+        <div class="lineup-row">
+          <div class="player-image-cell">
+            ${ourPlayerData ? ourPlayerData.image : '<div class="empty-slot">-</div>'}
+          </div>
+          <div class="player-info-cell our-side">
+            ${ourPlayerData ? ourPlayerData.info : '<div class="empty-slot">-</div>'}
+          </div>
+          <div class="player-points-cell">
+            ${ourPlayerData ? ourPlayerData.points : '-'}
+          </div>
+          <div class="position-cell">BN</div>
+          <div class="player-points-cell">
+            ${oppPlayerData ? oppPlayerData.points : '-'}
+          </div>
+          <div class="player-info-cell opp-side">
+            ${oppPlayerData ? oppPlayerData.info : '<div class="empty-slot">-</div>'}
+          </div>
+          <div class="player-image-cell">
+            ${oppPlayerData ? oppPlayerData.image : '<div class="empty-slot">-</div>'}
+          </div>
         </div>
-        <div class="position-cell">BN</div>
-        <div class="player-cell opp-side">
-          ${oppPlayer ? this.renderPlayer(oppPlayer, false, true) : '<div class="empty-slot">-</div>'}
-        </div>
-      </div>
-    `;
+      `;
+    }
+    
+    return benchRows;
   }
-  
-  return benchRows;
-}
 
   render() {
     if (!this._hass || !this.config.entity) return;
@@ -485,10 +445,8 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
     const oppProjected = attrs.opponent_projected_score || 0;
     const week = attrs.week || '?';
     const status = attrs.status || 'unknown';
-    const winner = attrs.winner || 'tbd';
     const showBench = this.config.show_bench || false;
 
-    // Filter starting lineups from roster data
     const ourRoster = attrs.our_roster || [];
     const oppRoster = attrs.opponent_roster || [];
     
@@ -500,26 +458,9 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
       .filter(player => player.is_starting)
       .sort((a, b) => this.getPositionOrder(a.selected_position) - this.getPositionOrder(b.selected_position));
 
-    // Determine colors based on winner
-    let ourTeamClass = 'team-neutral';
-    let oppTeamClass = 'team-neutral';
-    
-    if (winner === 'us') {
-      ourTeamClass = 'team-winner';
-      oppTeamClass = 'team-loser';
-    } else if (winner === 'opponent') {
-      ourTeamClass = 'team-loser';
-      oppTeamClass = 'team-winner';
-    } else if (winner === 'tie') {
-      ourTeamClass = 'team-tie';
-      oppTeamClass = 'team-tie';
-    }
-
-    // Get team logos
     const ourLogo = attrs.our_team_logo || '';
     const oppLogo = attrs.opponent_team_logo || '';
 
-    // Build lineup comparison with single position column
     const maxPlayers = Math.max(ourStarters.length, oppStarters.length);
     let lineupRows = '';
     
@@ -527,33 +468,50 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
       const ourPlayer = ourStarters[i];
       const oppPlayer = oppStarters[i];
       
-      // Get position from either player (prefer our player's position)
       const position = (ourPlayer && (ourPlayer.selected_position || ourPlayer.position)) || 
                       (oppPlayer && (oppPlayer.selected_position || oppPlayer.position)) || '';
       
+      const ourPlayerData = ourPlayer ? this.renderPlayer(ourPlayer, true) : null;
+      const oppPlayerData = oppPlayer ? this.renderPlayer(oppPlayer, false) : null;
+      
       lineupRows += `
         <div class="lineup-row">
-          <div class="player-cell our-side">
-            ${ourPlayer ? this.renderPlayer(ourPlayer, true) : '<div class="empty-slot">-</div>'}
+          <div class="player-image-cell">
+            ${ourPlayerData ? ourPlayerData.image : '<div class="empty-slot">-</div>'}
+          </div>
+          <div class="player-info-cell our-side">
+            ${ourPlayerData ? ourPlayerData.info : '<div class="empty-slot">-</div>'}
+          </div>
+          <div class="player-points-cell">
+            ${ourPlayerData ? ourPlayerData.points : '-'}
           </div>
           <div class="position-cell">
             ${position}
           </div>
-          <div class="player-cell opp-side">
-            ${oppPlayer ? this.renderPlayer(oppPlayer, false) : '<div class="empty-slot">-</div>'}
+          <div class="player-points-cell">
+            ${oppPlayerData ? oppPlayerData.points : '-'}
+          </div>
+          <div class="player-info-cell opp-side">
+            ${oppPlayerData ? oppPlayerData.info : '<div class="empty-slot">-</div>'}
+          </div>
+          <div class="player-image-cell">
+            ${oppPlayerData ? oppPlayerData.image : '<div class="empty-slot">-</div>'}
           </div>
         </div>
       `;
     }
 
-    // Generate bench sections if enabled
     const benchSections = showBench ? `
       <div class="bench-container">
         <div class="bench-title-main">Bench Players</div>
         <div class="bench-header">
+          <div></div>
           <div>Your Bench</div>
+          <div>Pts</div>
           <div>POS</div>
+          <div>Pts</div>
           <div>Opponent Bench</div>
+          <div></div>
         </div>
         ${this.renderCombinedBenchSection(ourRoster, oppRoster)}
       </div>
@@ -585,15 +543,13 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
         }
         .matchup-summary {
           display: grid;
-          grid-template-columns: 1fr auto 1fr; /* left | spacer | right */
+          grid-template-columns: 1fr auto 1fr;
           text-align: center;
           gap: 4px 16px;
         }
-
         .matchup-row {
-          display: contents; /* allows children to participate in parent grid */
+          display: contents;
         }
-
         .team-logo {
           width: 40px;
           height: 40px;
@@ -604,40 +560,33 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           align-items: center;
           justify-content: center;
         }
-
         .team-logo img {
           width: 100%;
           height: 100%;
           object-fit: cover;
         }
-
         .team-name {
           font-weight: 600;
           font-size: 12px;
-          word-break: break-word; /* allows wrapping */
+          word-break: break-word;
         }
-
         .manager-name {
           font-size: 10px;
           color: var(--secondary-text-color, #666);
         }
-
         .score {
           font-size: 20px;
           font-family: monospace;
           font-weight: bold;
         }
-
         .projected {
           font-size: 10px;
           font-family: monospace;
           color: var(--secondary-text-color, #666);
         }
-
         .vs {
           align-self: center;
         }
-
         .lineup-section {
           margin-top: 20px;
           padding: 0 8px;
@@ -651,7 +600,7 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
         }
         .lineup-header {
           display: grid;
-          grid-template-columns: 1fr 60px 1fr;
+          grid-template-columns: 32px 1fr 40px 60px 40px 1fr 32px;
           align-items: center;
           gap: 8px;
           margin-bottom: 8px;
@@ -664,7 +613,7 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
         }
         .lineup-row {
           display: grid;
-          grid-template-columns: 1fr 60px 1fr;
+          grid-template-columns: 32px 1fr 40px 60px 40px 1fr 32px;
           align-items: center;
           gap: 8px;
           margin-bottom: 8px;
@@ -681,54 +630,48 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           text-align: center;
           color: var(--primary-text-color, #333);
           padding: 6px 4px;
-          width: 100%;
         }
-        .player-cell {
+        .player-image-cell {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+        }
+        .player-info-cell {
           min-height: 50px;
           display: flex;
           align-items: center;
-          width: 100%;
+          overflow: hidden;
           padding: 0 4px;
         }
-        .our-side {
-          justify-content: flex-end;
-        }
-        .opp-side {
+        .player-info-cell.our-side {
           justify-content: flex-start;
         }
-        .player {
+        .player-info-cell.opp-side {
+          justify-content: flex-end;
+        }
+        .player-points-cell {
           display: flex;
+          justify-content: center;
           align-items: center;
-          gap: 8px;
-          padding: 0;
-          border-radius: 0;
-          background: transparent;
-          border: none;
-          max-width: 280px;
-          width: 100%;
-          overflow: hidden;
+          font-size: 12px;
+          font-weight: bold;
+          color: var(--primary-text-color, #333);
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
+        }
+        .player {
           cursor: pointer;
           transition: all 0.2s ease;
         }
-        .player:hover {
+        .player:hover, .player-image:hover, .player-info:hover {
           background: var(--secondary-background-color, #f0f0f0);
           transform: scale(1.02);
+          border-radius: 4px;
         }
         .bench-player {
           opacity: 0.8;
-          border-radius: 4px;
-          padding: 4px;
         }
         .bench-player:hover {
           opacity: 1;
-        }
-        .our-player {
-          flex-direction: row;
-          justify-content: flex-end;
-        }
-        .opp-player {
-          flex-direction: row-reverse;
-          justify-content: flex-start;
         }
         .player-image {
           width: 32px;
@@ -740,6 +683,8 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
+          cursor: pointer;
+          transition: all 0.2s ease;
         }
         .player-image img {
           width: 100%;
@@ -751,18 +696,19 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           color: var(--secondary-text-color, #666);
         }
         .player-info {
-          flex: 1;
           min-width: 0;
           overflow: hidden;
-          max-width: calc(100% - 80px);
+          cursor: pointer;
+          padding: 4px;
+          border-radius: 4px;
+          transition: all 0.2s ease;
+          max-width: 100%;
         }
-        .our-player .player-info {
-          text-align: right;
-          padding-right: 4px;
-        }
-        .opp-player .player-info {
+        .player-info.our-side {
           text-align: left;
-          padding-left: 4px;
+        }
+        .player-info.opp-side {
+          text-align: right;
         }
         .player-name {
           font-size: 11px;
@@ -784,18 +730,9 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
         .player-number {
           margin-left: 4px;
         }
-        .opp-player .player-number {
+        .player-info.opp-side .player-number {
           margin-left: 0;
           margin-right: 4px;
-        }
-        .player-points {
-          font-size: 12px;
-          font-weight: bold;
-          color: var(--primary-text-color, #333);
-          min-width: 35px;
-          text-align: center;
-          flex-shrink: 0;
-          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
         }
         .empty-slot {
           font-size: 12px;
@@ -803,24 +740,6 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           font-style: italic;
           text-align: center;
           width: 100%;
-        }
-        .winner-badge {
-          position: absolute;
-          top: -6px;
-          right: -6px;
-          background: #4CAF50;
-          color: white;
-          border-radius: 50%;
-          width: 16px;
-          height: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 10px;
-          font-weight: bold;
-        }
-        .team-container {
-          position: relative;
         }
         .score-diff {
           text-align: center;
@@ -844,7 +763,6 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           color: #9e9e9e;
         }
         
-        /* Bench Styles */
         .bench-container {
           margin-top: 24px;
           border-top: 2px solid var(--divider-color, #e0e0e0);
@@ -857,26 +775,9 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           margin-bottom: 16px;
           color: var(--primary-text-color, #333);
         }
-        .bench-comparison {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 0px;
-        }
-        .bench-section {
-          margin-top: 20px;
-        }
-        .bench-title {
-          font-size: 14px;
-          font-weight: 600;
-          color: var(--primary-text-color, #333);
-          margin-bottom: 4px;
-          text-align: center;
-          padding-bottom: 4px;
-          border-bottom: 1px solid var(--divider-color, #e0e0e0);
-        }
         .bench-header {
           display: grid;
-          grid-template-columns: 1fr 60px 1fr;
+          grid-template-columns: 32px 1fr 40px 60px 40px 1fr 32px;
           align-items: center;
           gap: 8px;
           margin-bottom: 8px;
@@ -886,100 +787,12 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           font-weight: 600;
           color: var(--secondary-text-color, #666);
           text-align: center;
-        }
-
-        .bench-lineup-row {
-          display: grid;
-          grid-template-columns: 1fr 60px 1fr;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 8px;
-          padding: 8px 4px;
-          border-radius: 6px;
-          transition: background-color 0.2s ease;
-        }
-
-        .bench-position-cell {
-          font-size: 11px;
-          font-weight: 700;
-          text-align: center;
-          color: var(--primary-text-color, #333);
-          padding: 6px 4px;
-        }
-        .bench-players {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-        .bench-row {
-          display: flex;
-          align-items: center;
-          gap: 0px;
-          padding: 0px;
-          border-radius: 0px;
-          transition: background-color 0.2s ease;
-        }
-        .bench-row:hover {
-          background: var(--card-background-color, white);
-        }
-        .bench-position {
-          font-size: 10px;
-          font-weight: 700;
-          color: var(--secondary-text-color, #666);
-          min-width: 24px;
-          text-align: center;
-          background: var(--card-background-color, white);
-          padding: 2px 3px;
-        }
-        .bench-player-cell {
-          min-height: 50px;
-          display: flex;
-          align-items: center;
-          width: 100%;
-          padding: 0 4px;
-        }
-        .bench-player-cell.our-side {
-          justify-content: flex-end;
-        }
-        .bench-player-cell.opp-side {
-          justify-content: flex-start;
-        }
-        .bench-player-cell .player {
-          max-width: none;
-          width: 100%;
-        }
-        .bench-player-cell .our-player {
-          flex-direction: row;
-          justify-content: flex-start;
-        }
-        .bench-player-cell .our-player .player-info {
-          text-align: left;
-          padding-right: 0;
-          padding-left: 4px;
-        }
-        .bench-player-cell .opp-player {
-          flex-direction: row;
-          justify-content: flex-start;
-        }
-        .bench-player-cell .opp-player .player-info {
-          text-align: left;
-          padding-right: 0;
-          padding-left: 4px;
-        }
-        .bench-player-cell .player-number {
-          margin-left: 4px;
-          margin-right: 0;
         }
         @media (max-width: 600px) {
           .matchup-summary {
             grid-template-columns: 1fr auto 1fr;
             gap: 8px;
             padding: 12px;
-          }
-          .team-summary {
-            max-width: 140px;
-            min-width: 0;
-            padding: 8px;
           }
           .team-name {
             font-size: 11px;
@@ -989,8 +802,8 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
             padding: 0 8px;
             font-size: 12px;
           }
-          .lineup-row, .lineup-header {
-            grid-template-columns: 1fr 36px 1fr;
+          .lineup-row, .lineup-header, .bench-header {
+            grid-template-columns: 28px 1fr 35px 36px 35px 1fr 28px;
             gap: 4px;
             padding: 6px 2px;
           }
@@ -1000,46 +813,25 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
             padding: 3px 2px;
             line-height: 1.1;
           }
-          .player {
-            max-width: none;
-            gap: 6px;
-          }
           .player-name {
             font-size: 10px;
           }
           .player-details {
             font-size: 8px;
           }
-          .player-points {
+          .player-points-cell {
             font-size: 10px;
             min-width: 30px;
-          }
-          .player-cell {
-            padding: 0 1px;
           }
           .player-image {
             width: 28px;
             height: 28px;
           }
-          .our-player .player-info {
-            padding-right: 2px;
-          }
-          .opp-player .player-info {
+          .player-info {
             padding-left: 2px;
           }
           .bench-title-main {
             font-size: 14px;
-          }
-          .bench-title {
-            font-size: 12px;
-          }
-          .bench-position {
-            min-width: 28px;
-            font-size: 9px;
-            padding: 3px 4px;
-          }
-          .bench-row {
-            gap: 2px;
           }
         }
       </style>
@@ -1051,35 +843,30 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
         </div>
         
         <div class="matchup-summary">
-          <!-- Logos row -->
           <div class="matchup-row">
             <div class="team-logo">${ourLogo ? `<img src="${ourLogo}">` : '🏈'}</div>
             <div></div>
             <div class="team-logo">${oppLogo ? `<img src="${oppLogo}">` : '🏈'}</div>
           </div>
 
-          <!-- Team names row -->
           <div class="matchup-row">
             <div class="team-name">${attrs.our_team_name}</div>
             <div class="vs">VS</div>
             <div class="team-name">${attrs.opponent_team_name}</div>
           </div>
 
-          <!-- Manager row -->
           <div class="matchup-row">
             <div class="manager-name">${attrs.our_manager}</div>
             <div></div>
             <div class="manager-name">${attrs.opponent_manager}</div>
           </div>
 
-          <!-- Scores row -->
           <div class="matchup-row">
             <div class="score">${ourScore.toFixed(2)}</div>
             <div></div>
             <div class="score">${oppScore.toFixed(2)}</div>
           </div>
 
-          <!-- Projected row -->
           <div class="matchup-row">
             <div class="projected">Proj: ${ourProjected.toFixed(2)}</div>
             <div></div>
@@ -1087,7 +874,6 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           </div>
         </div>
 
-        
         ${attrs.score_differential !== undefined ? `
           <div class="score-diff ${attrs.score_differential > 0 ? 'positive' : attrs.score_differential < 0 ? 'negative' : 'zero'}">
             ${attrs.score_differential > 0 ? '+' : ''}${attrs.score_differential.toFixed(2)} points
@@ -1098,9 +884,13 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
           <div class="lineup-section">
             <div class="lineup-title">Starting Lineups</div>
             <div class="lineup-header">
+              <div></div>
               <div>Your Team</div>
+              <div>Pts</div>
               <div>POS</div>
+              <div>Pts</div>
               <div>Opponent</div>
+              <div></div>
             </div>
             ${lineupRows}
           </div>
@@ -1118,7 +908,6 @@ renderCombinedBenchSection(ourRoster, oppRoster) {
 
 customElements.define('yahoo-fantasy-matchup-card', YahooFantasyMatchupCard);
 
-// Add card to custom card registry
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'yahoo-fantasy-matchup-card',
