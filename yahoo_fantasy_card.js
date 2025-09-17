@@ -444,8 +444,12 @@ class YahooFantasyMatchupCard extends HTMLElement {
     const ourProjected = attrs.our_projected_score || 0;
     const oppProjected = attrs.opponent_projected_score || 0;
     const week = attrs.week || '?';
-    const status = attrs.status || 'unknown';
+    const leagueName = attrs.league_info?.name || 'Fantasy League';
     const showBench = this.config.show_bench || false;
+
+    // Get win probabilities
+    const ourWinProb = attrs.our_win_probability || 0;
+    const oppWinProb = attrs.opponent_win_probability || 0;
 
     const ourRoster = attrs.our_roster || [];
     const oppRoster = attrs.opponent_roster || [];
@@ -507,9 +511,9 @@ class YahooFantasyMatchupCard extends HTMLElement {
         <div class="bench-header">
           <div></div>
           <div>Your Bench</div>
-          <div>Pts</div>
+          <div></div>
           <div>POS</div>
-          <div>Pts</div>
+          <div></div>
           <div>Opponent Bench</div>
           <div></div>
         </div>
@@ -530,16 +534,16 @@ class YahooFantasyMatchupCard extends HTMLElement {
           text-align: center;
           margin-bottom: 16px;
         }
+        .league-name {
+          font-size: 16px;
+          font-weight: 700;
+          color: var(--primary-text-color, #333);
+          margin-bottom: 4px;
+        }
         .week {
           font-size: 14px;
           color: var(--secondary-text-color, #666);
           font-weight: 500;
-        }
-        .status {
-          font-size: 12px;
-          color: var(--secondary-text-color, #666);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
         }
         .matchup-summary {
           display: grid;
@@ -838,8 +842,8 @@ class YahooFantasyMatchupCard extends HTMLElement {
       
       <div class="card">
         <div class="header">
+          <div class="league-name">${leagueName}</div>
           <div class="week">Week ${week}</div>
-          <div class="status">${status}</div>
         </div>
         
         <div class="matchup-summary">
@@ -872,6 +876,12 @@ class YahooFantasyMatchupCard extends HTMLElement {
             <div></div>
             <div class="projected">Proj: ${oppProjected.toFixed(2)}</div>
           </div>
+
+          <div class="matchup-row">
+            <div class="win-probability">${(ourWinProb * 100).toFixed(0)}%</div>
+            <div></div>
+            <div class="win-probability">${(oppWinProb * 100).toFixed(0)}%</div>
+          </div>
         </div>
 
         ${attrs.score_differential !== undefined ? `
@@ -886,9 +896,9 @@ class YahooFantasyMatchupCard extends HTMLElement {
             <div class="lineup-header">
               <div></div>
               <div>Your Team</div>
-              <div>Pts</div>
+              <div></div>
               <div>POS</div>
-              <div>Pts</div>
+              <div></div>
               <div>Opponent</div>
               <div></div>
             </div>
