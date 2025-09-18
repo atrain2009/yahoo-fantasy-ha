@@ -65,6 +65,11 @@ The entity created in Home Assistant includes many different attributes: the pri
 
 ## Add your matchup to your Dashboard
 I also made a dashboard card that shows your matchup info (it shows your team and score vs your opponent with team logos, and starting lineup info with player headshots). It also includes a visual representation of your matchup's win probability on a football field.
+
+<img width="476" height="146" alt="win_probability_graphic" src="https://github.com/user-attachments/assets/bfb5031e-6848-4789-86c9-9bf831280547" />
+
+
+
 1. Download yahoo_fantasy_card.js
 2. Add it to your /www/community directory
 3. In Home Assistant, go to Settings > Dashboards > click the 3 dots in the top right and click Resources
