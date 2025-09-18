@@ -45,6 +45,100 @@ class YahooFantasyMatchupCard extends HTMLElement {
     }
   }
 
+  renderFootballField(ourWinProb, oppWinProb, ourTeamName, oppTeamName) {
+    // Calculate ball position (0-100, where 50 is midfield)
+    // ourWinProb of 0.7 means ball at ~70 yard line (opponent's 30)
+    const ballPosition = ourWinProb * 100;
+    
+    // Calculate yard line number for the marker
+    const getYardLineNumber = (ourWinProb, oppWinProb) => {
+      // Use the higher probability to determine field position
+      const dominantProb = ourWinProb > oppWinProb ? ourWinProb : oppWinProb;
+      // Convert to yard line (50-100 range for whichever team is winning)
+      return Math.round(50 + (dominantProb - 0.5) * 100);
+    };
+    
+    const yardLineNumber = getYardLineNumber(ourWinProb, oppWinProb);
+    
+    // Generate proper football field yard markers
+    const generateYardMarkers = () => {
+      const markers = [];
+      for (let i = 0; i <= 10; i++) {
+        let yardNumber = '';
+        if (i === 0 || i === 10) yardNumber = '';
+        else if (i <= 5) yardNumber = (i * 10).toString();
+        else yardNumber = ((10 - i) * 10).toString();
+        
+        if (yardNumber) {
+          markers.push(`
+            <div class="yard-line" style="left: ${i * 10}%">
+              <span class="yard-marker">${yardNumber}</span>
+            </div>
+          `);
+        }
+      }
+      return markers.join('');
+    };
+    
+    // Generate hash marks (small tick marks for each yard)
+    const generateHashMarks = () => {
+      const marks = [];
+      for (let i = 1; i <= 99; i++) {
+        if (i % 10 !== 0) { // Skip major yard lines
+          marks.push(`
+            <div class="hash-mark-top" style="left: ${i}%; background: rgba(255, 255, 255, 0.5) !important; height: 3px !important; width: 1px !important;"></div>
+            <div class="hash-mark-bottom" style="left: ${i}%; background: rgba(255, 255, 255, 0.5) !important; height: 3px !important; width: 1px !important;"></div>
+          `);
+        }
+      }
+      return marks.join('');
+    };
+    
+    return `
+      <div class="football-field-container">
+        <div class="football-field">
+          <!-- Field markings -->
+          <div class="field-lines">
+            ${generateYardMarkers()}
+            ${generateHashMarks()}
+            <div class="midfield-line"></div>
+          </div>
+          
+          <!-- End zones -->
+          <div class="endzone left-endzone">
+            <span class="endzone-text">YOU</span>
+          </div>
+          <div class="endzone right-endzone">
+            <span class="endzone-text">OPPONENT</span>
+          </div>
+          
+          <!-- First down marker -->
+          <div class="first-down-marker" style="left: ${ballPosition}%">
+            <div class="yard-indicator">${yardLineNumber}</div>
+          </div>
+          
+          <!-- Football/ball position -->
+          <div class="football" style="left: ${ballPosition}%">
+            🏈
+          </div>
+          
+          <!-- Win probability bars -->
+          <div class="win-prob-bar left-bar" style="width: ${oppWinProb * 50}%">
+          </div>
+          <div class="win-prob-bar right-bar" style="width: ${ourWinProb * 50}%">
+          </div>
+        </div>
+        <div class="field-legend">
+          <div class="legend-item">
+            <span class="legend-team left">${ourTeamName}</span>
+            <span class="legend-vs">Field Position</span>
+            <span class="legend-team right">${oppTeamName}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   showPlayerPopup(playerId, playerName, position, team, uniformNumber, points, imageUrl, stats) {
     this.closePlayerPopup();
     
@@ -591,6 +685,195 @@ class YahooFantasyMatchupCard extends HTMLElement {
         .vs {
           align-self: center;
         }
+        
+        /* Football Field Styles */
+        .football-field-container {
+          margin: 16px 8px;
+          padding: 16px;
+          background: linear-gradient(to bottom, #2d5a2d, #4a7c59);
+          border-radius: 8px;
+          box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .football-field {
+          position: relative;
+          height: 80px;
+          background: linear-gradient(90deg, 
+            #8B4513 0%, #8B4513 5%,
+            #2d5a2d 5%, #2d5a2d 95%,
+            #8B4513 95%, #8B4513 100%);
+          border-radius: 4px;
+          overflow: visible;
+          margin-bottom: 20px;
+        }
+        .field-lines {
+          position: absolute;
+          top: 0;
+          left: 5%;
+          right: 5%;
+          height: 100%;
+        }
+        .yard-line {
+          position: absolute;
+          top: 0;
+          height: 100%;
+          width: 1px;
+          background: rgba(255, 255, 255, 0.6);
+        }
+        .yard-line:nth-child(6) {
+          width: 2px;
+          background: rgba(255, 255, 255, 0.9);
+        }
+        .yard-marker {
+          position: absolute;
+          top: 50%;
+          left: -8px;
+          transform: translateY(-50%);
+          font-size: 8px;
+          color: white;
+          font-weight: bold;
+          text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+        }
+        .midfield-line {
+          position: absolute;
+          left: 50%;
+          top: 0;
+          height: 100%;
+          width: 2px;
+          background: rgba(255, 255, 255, 0.9);
+          transform: translateX(-50%);
+        }
+        .endzone {
+          position: absolute;
+          top: 0;
+          width: 5%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 8px;
+          font-weight: bold;
+          color: white;
+          text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+        }
+        .left-endzone {
+          left: 0;
+          background: linear-gradient(90deg, #8B4513, rgba(139, 69, 19, 0.8));
+        }
+        .right-endzone {
+          right: 0;
+          background: linear-gradient(270deg, #8B4513, rgba(139, 69, 19, 0.8));
+        }
+        .endzone-text {
+          writing-mode: vertical-rl;
+          text-orientation: mixed;
+        }
+        .football {
+          position: absolute;
+          top: 50%;
+          transform: translateX(-50%) translateY(-50%);
+          font-size: 16px;
+          z-index: 12;
+          filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
+          animation: footballBob 2s ease-in-out infinite;
+        }
+        .first-down-marker {
+          position: absolute;
+          top: 0;
+          height: 100%;
+          width: 4px;
+          background: linear-gradient(to bottom, #FFD700, #FFA500);
+          transform: translateX(-50%);
+          z-index: 11;
+          border-radius: 2px;
+          box-shadow: 0 0 4px rgba(255, 215, 0, 0.6);
+        }
+        .yard-indicator {
+          position: absolute;
+          bottom: -18px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.9);
+          color: #FFD700;
+          font-size: 9px;
+          font-weight: bold;
+          padding: 2px 6px;
+          border-radius: 4px;
+          white-space: nowrap;
+          font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
+          border: 1px solid #FFD700;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+          z-index: 15;
+        }
+        .hash-mark-top {
+          position: absolute;
+          top: 0;
+          width: 1px;
+          height: 8px;
+          background: rgba(255, 255, 255, 0.5);
+          transform: translateX(-50%);
+        }
+        .hash-mark-bottom {
+          position: absolute;
+          bottom: 0;
+          width: 1px;
+          height: 8px;
+          background: rgba(255, 255, 255, 0.5);
+          transform: translateX(-50%);
+        }
+        @keyframes footballBob {
+          0%, 100% { transform: translateX(-50%) translateY(-50%); }
+          50% { transform: translateX(-50%) translateY(-55%); }
+        }
+        .win-prob-bar {
+          position: absolute;
+          top: 0;
+          height: 100%;
+          background: rgba(255, 255, 255, 0.15);
+          transition: width 0.8s ease;
+        }
+        .left-bar {
+          left: 5%;
+          border-radius: 0 4px 4px 0;
+        }
+        .right-bar {
+          right: 5%;
+          border-radius: 4px 0 0 4px;
+        }
+
+        .field-legend {
+          display: flex;
+          justify-content: center;
+          margin-top: 8px;
+        }
+        .legend-item {
+          display: grid;
+          grid-template-columns: 1fr auto 1fr;
+          align-items: center;
+          gap: 12px;
+          font-size: 10px;
+          color: white;
+          font-weight: 500;
+          width: 100%;
+        }
+        .legend-team {
+          font-weight: 600;
+          text-align: center;
+        }
+        .legend-team.left {
+          color: #90EE90;
+          justify-self: center;
+        }
+        .legend-team.right {
+          color: #ffcccb;
+          justify-self: center;
+        }
+        .legend-vs {
+          color: rgba(255, 255, 255, 0.8);
+          font-size: 9px;
+          text-align: center;
+          justify-self: center;
+        }
+        
         .lineup-section {
           margin-top: 20px;
           padding: 0 8px;
@@ -806,6 +1089,29 @@ class YahooFantasyMatchupCard extends HTMLElement {
             padding: 0 8px;
             font-size: 12px;
           }
+          .football-field-container {
+            margin: 12px 4px;
+            padding: 12px;
+          }
+          .football-field {
+            height: 60px;
+          }
+          .football {
+            font-size: 12px;
+          }
+          .yard-marker {
+            font-size: 6px;
+            left: -6px;
+          }
+          .endzone {
+            font-size: 6px;
+          }
+          .win-prob-text {
+            font-size: 8px;
+          }
+          .legend-item {
+            font-size: 9px;
+          }
           .lineup-row, .lineup-header, .bench-header {
             grid-template-columns: 28px 1fr 35px 36px 35px 1fr 28px;
             gap: 4px;
@@ -876,13 +1182,9 @@ class YahooFantasyMatchupCard extends HTMLElement {
             <div></div>
             <div class="projected">Proj: ${oppProjected.toFixed(2)}</div>
           </div>
-
-          <div class="matchup-row">
-            <div class="win-probability">${(ourWinProb * 100).toFixed(0)}%</div>
-            <div></div>
-            <div class="win-probability">${(oppWinProb * 100).toFixed(0)}%</div>
-          </div>
         </div>
+
+        ${this.renderFootballField(ourWinProb, oppWinProb, attrs.our_team_name, attrs.opponent_team_name)}
 
         ${attrs.score_differential !== undefined ? `
           <div class="score-diff ${attrs.score_differential > 0 ? 'positive' : attrs.score_differential < 0 ? 'negative' : 'zero'}">
@@ -892,7 +1194,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
         
         ${ourStarters.length > 0 || oppStarters.length > 0 ? `
           <div class="lineup-section">
-            <div class="lineup-title">Starting Lineups</div>
+            <div class="lineup-title">Starting Lineup</div>
             <div class="lineup-header">
               <div></div>
               <div>Your Team</div>
@@ -922,11 +1224,11 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'yahoo-fantasy-matchup-card',
   name: 'Yahoo Fantasy Matchup Card',
-  description: 'A card to display Yahoo Fantasy Football matchup information with starting lineups and player points. Configure with show_bench: true to display bench players.',
+  description: 'A card to display Yahoo Fantasy Football matchup information with starting lineups, player points, and a football field win probability visualization. Configure with show_bench: true to display bench players.',
 });
 
 console.info(
-  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.3.0                ',
+  '%c  YAHOO-FANTASY-MATCHUP-CARD  \n%c  Version 2.4.0                ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
