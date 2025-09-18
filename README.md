@@ -64,7 +64,7 @@ Restart Home Assistant and you should be all set!
 The entity created in Home Assistant includes many different attributes: the primary state is your team's score for the week, with attributes for both yours and your opponent's roster (with an is_starting attribute to designate players in your starting lineup).
 
 ## Add your matchup to your Dashboard
-I also made a dashboard card that shows your matchup info (it shows your team and score vs your opponent with team logos, and starting lineup info with player headshots).
+I also made a dashboard card that shows your matchup info (it shows your team and score vs your opponent with team logos, and starting lineup info with player headshots). It also includes a visual representation of your matchup's win probability on a football field.
 1. Download yahoo_fantasy_card.js
 2. Add it to your /www/community directory
 3. In Home Assistant, go to Settings > Dashboards > click the 3 dots in the top right and click Resources
