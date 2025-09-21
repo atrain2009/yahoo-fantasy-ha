@@ -781,6 +781,228 @@ class YahooFantasyMatchupSensor(Entity):
         
         return breakdown
 
+    def _get_touchdown_stats(self, roster, stat_categories):
+        """Aggregate all touchdown stats for a team and find last touchdown scorer."""
+        touchdown_stats = {
+            "total_touchdowns": 0,
+            "passing_tds": 0,
+            "rushing_tds": 0,
+            "receiving_tds": 0,
+            "defensive_tds": 0,
+            "return_tds": 0,
+            "last_td_scorer": None,
+            "last_td_type": None,
+            "touchdown_scorers": []  # List of all players with TDs
+        }
+        
+        if not roster or not stat_categories:
+            return touchdown_stats
+        
+        # Common touchdown stat IDs in Yahoo Fantasy (these may vary by year/league)
+        touchdown_stat_mappings = {
+            "passing_tds": ["4", "passing_touchdowns", "pass_td"],
+            "rushing_tds": ["6", "rushing_touchdowns", "rush_td"],
+            "receiving_tds": ["11", "receiving_touchdowns", "rec_td"],
+            "defensive_tds": ["45", "defensive_touchdowns", "def_td"],
+            "return_tds": ["32", "return_touchdowns", "ret_td"],
+            # Add more mappings as needed
+        }
+        
+        # Create reverse lookup for stat names to TD types
+        stat_name_to_td_type = {}
+        for td_type, potential_names in touchdown_stat_mappings.items():
+            for name in potential_names:
+                stat_name_to_td_type[name.lower()] = td_type
+        
+        # Also check stat categories for touchdown-related stats
+        td_stat_ids = set()
+        for stat_id, stat_info in stat_categories.items():
+            stat_name = (stat_info.get("name") or stat_info.get("display_name") or "").lower()
+            stat_abbr = (stat_info.get("abbr") or "").lower()
+            
+            # Look for touchdown keywords
+            if any(keyword in stat_name or keyword in stat_abbr for keyword in 
+                   ["touchdown", "td", "passing_td", "rushing_td", "receiving_td", "defensive_td"]):
+                td_stat_ids.add(stat_id)
+                
+                # Map this stat ID to a TD type
+                for td_type, potential_names in touchdown_stat_mappings.items():
+                    if any(name in stat_name or name in stat_abbr for name in potential_names):
+                        stat_name_to_td_type[stat_id] = td_type
+                        break
+        
+        # Process each player in the roster
+        last_td_points = -1  # Track highest scoring TD player as proxy for "last"
+        
+        for player in roster:
+            if not player.get("stats") or not player.get("is_starting"):
+                continue
+                
+            player_tds = {
+                "passing_tds": 0,
+                "rushing_tds": 0,
+                "receiving_tds": 0,
+                "defensive_tds": 0,
+                "return_tds": 0
+            }
+            
+            player_total_tds = 0
+            
+            # Check each stat for touchdown indicators
+            for stat_name, stat_info in player.get("stats", {}).items():
+                try:
+                    stat_value = float(stat_info.get("value", 0))
+                    if stat_value <= 0:
+                        continue
+                        
+                    stat_display = stat_info.get("display", "").lower()
+                    stat_name_lower = stat_name.lower()
+                    
+                    # Try to identify TD type from stat name
+                    td_type = None
+                    
+                    # Check direct mappings first
+                    for potential_td_type, keywords in touchdown_stat_mappings.items():
+                        if any(keyword in stat_name_lower for keyword in keywords):
+                            td_type = potential_td_type
+                            break
+                    
+                    # If not found, check if it's a general TD stat
+                    if not td_type and any(keyword in stat_name_lower for keyword in ["touchdown", "td"]):
+                        # Try to infer type from context
+                        if any(keyword in stat_name_lower for keyword in ["pass", "passing"]):
+                            td_type = "passing_tds"
+                        elif any(keyword in stat_name_lower for keyword in ["rush", "rushing"]):
+                            td_type = "rushing_tds"
+                        elif any(keyword in stat_name_lower for keyword in ["rec", "receiving"]):
+                            td_type = "receiving_tds"
+                        elif any(keyword in stat_name_lower for keyword in ["def", "defensive"]):
+                            td_type = "defensive_tds"
+                        elif any(keyword in stat_name_lower for keyword in ["ret", "return"]):
+                            td_type = "return_tds"
+                        else:
+                            # Generic touchdown - try to infer from player position
+                            player_pos = (player.get("position") or "").upper()
+                            if player_pos in ["QB"]:
+                                td_type = "passing_tds"
+                            elif player_pos in ["RB", "FB"]:
+                                td_type = "rushing_tds"
+                            elif player_pos in ["WR", "TE"]:
+                                td_type = "receiving_tds"
+                            elif player_pos in ["DEF", "D/ST"]:
+                                td_type = "defensive_tds"
+                            else:
+                                td_type = "receiving_tds"  # Default assumption
+                    
+                    if td_type:
+                        td_count = int(stat_value)
+                        player_tds[td_type] += td_count
+                        player_total_tds += td_count
+                        
+                except (ValueError, TypeError):
+                    continue
+            
+            # If this player scored touchdowns, add to our tracking
+            if player_total_tds > 0:
+                player_total_points = player.get("points_total", 0)
+                
+                touchdown_stats["touchdown_scorers"].append({
+                    "name": player.get("name"),
+                    "position": player.get("position"),
+                    "touchdowns": player_total_tds,
+                    "td_breakdown": {k: v for k, v in player_tds.items() if v > 0},
+                    "total_points": player_total_points
+                })
+                
+                # Update team totals
+                for td_type in player_tds:
+                    touchdown_stats[td_type] += player_tds[td_type]
+                
+                # Track "last" scorer (use highest scoring as proxy)
+                if player_total_points > last_td_points:
+                    last_td_points = player_total_points
+                    touchdown_stats["last_td_scorer"] = player.get("name")
+                    
+                    # Determine primary TD type for this player
+                    max_tds = max(player_tds.values())
+                    for td_type, count in player_tds.items():
+                        if count == max_tds:
+                            touchdown_stats["last_td_type"] = td_type.replace("_tds", "").replace("_", " ").title()
+                            break
+        
+        # Calculate total touchdowns
+        touchdown_stats["total_touchdowns"] = sum([
+            touchdown_stats["passing_tds"],
+            touchdown_stats["rushing_tds"], 
+            touchdown_stats["receiving_tds"],
+            touchdown_stats["defensive_tds"],
+            touchdown_stats["return_tds"]
+        ])
+        
+        # Sort touchdown scorers by points (highest first)
+        touchdown_stats["touchdown_scorers"].sort(key=lambda x: x["total_points"], reverse=True)
+        
+        return touchdown_stats
+
+    def _add_touchdown_attributes(self, attributes, our_roster, opponent_roster, stat_categories):
+        """Add touchdown aggregation attributes for both teams."""
+        try:
+            # Get touchdown stats for our team
+            our_td_stats = self._get_touchdown_stats(our_roster, stat_categories)
+            
+            # Add our team's touchdown attributes
+            attributes.update({
+                "our_total_touchdowns": our_td_stats["total_touchdowns"],
+                "our_passing_tds": our_td_stats["passing_tds"],
+                "our_rushing_tds": our_td_stats["rushing_tds"],
+                "our_receiving_tds": our_td_stats["receiving_tds"],
+                "our_defensive_tds": our_td_stats["defensive_tds"],
+                "our_return_tds": our_td_stats["return_tds"],
+                "our_last_td_scorer": our_td_stats["last_td_scorer"],
+                "our_last_td_type": our_td_stats["last_td_type"],
+                "our_touchdown_scorers": our_td_stats["touchdown_scorers"]
+            })
+            
+            # Get touchdown stats for opponent team
+            if opponent_roster:
+                opp_td_stats = self._get_touchdown_stats(opponent_roster, stat_categories)
+                
+                # Add opponent's touchdown attributes
+                attributes.update({
+                    "opponent_total_touchdowns": opp_td_stats["total_touchdowns"],
+                    "opponent_passing_tds": opp_td_stats["passing_tds"],
+                    "opponent_rushing_tds": opp_td_stats["rushing_tds"],
+                    "opponent_receiving_tds": opp_td_stats["receiving_tds"],
+                    "opponent_defensive_tds": opp_td_stats["defensive_tds"],
+                    "opponent_return_tds": opp_td_stats["return_tds"],
+                    "opponent_last_td_scorer": opp_td_stats["last_td_scorer"],
+                    "opponent_last_td_type": opp_td_stats["last_td_type"],
+                    "opponent_touchdown_scorers": opp_td_stats["touchdown_scorers"]
+                })
+            else:
+                # Add null values for opponent if no opponent roster
+                attributes.update({
+                    "opponent_total_touchdowns": 0,
+                    "opponent_passing_tds": 0,
+                    "opponent_rushing_tds": 0,
+                    "opponent_receiving_tds": 0,
+                    "opponent_defensive_tds": 0,
+                    "opponent_return_tds": 0,
+                    "opponent_last_td_scorer": None,
+                    "opponent_last_td_type": None,
+                    "opponent_touchdown_scorers": []
+                })
+                
+        except Exception as e:
+            _LOGGER.error(f"Error adding touchdown attributes: {e}")
+            # Add safe defaults on error
+            attributes.update({
+                "our_total_touchdowns": 0,
+                "our_last_td_scorer": None,
+                "opponent_total_touchdowns": 0, 
+                "opponent_last_td_scorer": None
+            })
+
     def _get_current_week(self):
         """Fetch current week from league data."""
         try:
@@ -1093,6 +1315,9 @@ class YahooFantasyMatchupSensor(Entity):
             if league_settings and league_settings.get("league_info"):
                 self._attributes["league_info"] = league_settings.get("league_info", {})
 
+            # ADD TOUCHDOWN TRACKING ATTRIBUTES
+            self._add_touchdown_attributes(self._attributes, our_roster, opponent_roster, stat_categories)
+
             # Set entity picture to our team logo
             if our_team.get("logo"):
                 self._attributes["entity_picture"] = our_team.get("logo")
@@ -1107,6 +1332,14 @@ class YahooFantasyMatchupSensor(Entity):
             if self._debug_mode:
                 log_message += f" [DEBUG MODE ACTIVE - See attributes for detailed analysis]"
             
+            # Add touchdown info to log if any TDs were scored
+            our_tds = self._attributes.get("our_total_touchdowns", 0)
+            opp_tds = self._attributes.get("opponent_total_touchdowns", 0)
+            if our_tds > 0 or opp_tds > 0:
+                log_message += f" | TDs: Us {our_tds}, Them {opp_tds}"
+                if self._attributes.get("our_last_td_scorer"):
+                    log_message += f" | Last TD: {self._attributes['our_last_td_scorer']}"
+
             _LOGGER.info(log_message)
 
         except Exception as e:
