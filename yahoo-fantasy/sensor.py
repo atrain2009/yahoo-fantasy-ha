@@ -792,55 +792,99 @@ class YahooFantasyMatchupSensor(Entity):
             "return_tds": 0,
             "last_td_scorer": None,
             "last_td_type": None,
-            "touchdown_scorers": []  # List of all players with TDs
+            "touchdown_scorers": []
         }
         
         if not roster or not stat_categories:
+            _LOGGER.debug("No roster or stat_categories provided for touchdown tracking")
             return touchdown_stats
         
-        # Common touchdown stat IDs in Yahoo Fantasy (these may vary by year/league)
-        touchdown_stat_mappings = {
-            "passing_tds": ["4", "passing_touchdowns", "pass_td"],
-            "rushing_tds": ["6", "rushing_touchdowns", "rush_td"],
-            "receiving_tds": ["11", "receiving_touchdowns", "rec_td"],
-            "defensive_tds": ["45", "defensive_touchdowns", "def_td"],
-            "return_tds": ["32", "return_touchdowns", "ret_td"],
-            # Add more mappings as needed
-        }
+        # Build mapping of stat names to touchdown types using stat_categories
+        td_stat_mappings = {}
         
-        # Create reverse lookup for stat names to TD types
-        stat_name_to_td_type = {}
-        for td_type, potential_names in touchdown_stat_mappings.items():
-            for name in potential_names:
-                stat_name_to_td_type[name.lower()] = td_type
-        
-        # Also check stat categories for touchdown-related stats
-        td_stat_ids = set()
         for stat_id, stat_info in stat_categories.items():
-            stat_name = (stat_info.get("name") or stat_info.get("display_name") or "").lower()
+            stat_name = (stat_info.get("name") or "").lower()
+            stat_display = (stat_info.get("display_name") or "").lower() 
             stat_abbr = (stat_info.get("abbr") or "").lower()
             
-            # Look for touchdown keywords
-            if any(keyword in stat_name or keyword in stat_abbr for keyword in 
-                   ["touchdown", "td", "passing_td", "rushing_td", "receiving_td", "defensive_td"]):
-                td_stat_ids.add(stat_id)
+            # Skip bonus/modifier touchdown stats that would cause double counting
+            exclusion_keywords = [
+                "40+ yard", "40+", "50+ yard", "50+", "yard", 
+                "long", "bonus", "2 pt", "2pt", "conversion",
+                "40-49", "50+", "1-9", "10-19", "20-29", "30-39"
+            ]
+            
+            # Check if this is a bonus/modifier stat that should be excluded
+            if any(keyword in stat_name for keyword in exclusion_keywords):
+                _LOGGER.debug(f"Excluding bonus TD stat: '{stat_name}' (ID: {stat_id})")
+                continue
+            
+            # More precise touchdown detection
+            td_type = None
+            
+            # Check for exact matches first (most reliable)
+            if stat_name in ["passing touchdowns", "pass td", "passing_touchdowns"]:
+                td_type = "passing_tds"
+            elif stat_name in ["rushing touchdowns", "rush td", "rushing_touchdowns"]:
+                td_type = "rushing_tds"
+            elif stat_name in ["receiving touchdowns", "rec td", "receiving_touchdowns"]:
+                td_type = "receiving_tds"
+            elif stat_name in ["defensive touchdowns", "def td", "defensive_touchdowns"]:
+                td_type = "defensive_tds"
+            elif stat_name in ["return touchdowns", "ret td", "return_touchdowns"]:
+                td_type = "return_tds"
+            
+            # Then check for keyword combinations (more strict)
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["pass", "passing"]):
+                td_type = "passing_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["rush", "rushing"]):
+                td_type = "rushing_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["rec", "receiving"]):
+                td_type = "receiving_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["def", "defensive"]):
+                td_type = "defensive_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["ret", "return"]):
+                td_type = "return_tds"
+            
+            # Check abbreviations too
+            elif stat_abbr and any(abbr in stat_abbr for abbr in ["passtd", "ptd"]):
+                td_type = "passing_tds"
+            elif stat_abbr and any(abbr in stat_abbr for abbr in ["rushtd", "rtd"]):
+                td_type = "rushing_tds"
+            elif stat_abbr and any(abbr in stat_abbr for abbr in ["rectd", "receivetd"]):
+                td_type = "receiving_tds"
+            
+            if td_type:
+                td_stat_mappings[stat_name] = td_type
+                td_stat_mappings[stat_display] = td_type
+                if stat_abbr:
+                    td_stat_mappings[stat_abbr] = td_type
+                # Also map by stat_id for direct lookup
+                td_stat_mappings[f"stat_{stat_id}"] = td_type
                 
-                # Map this stat ID to a TD type
-                for td_type, potential_names in touchdown_stat_mappings.items():
-                    if any(name in stat_name or name in stat_abbr for name in potential_names):
-                        stat_name_to_td_type[stat_id] = td_type
-                        break
+                _LOGGER.debug(f"Mapped stat '{stat_name}' (ID: {stat_id}) to {td_type}")
+        
+        if not td_stat_mappings:
+            _LOGGER.warning("No touchdown stats found in stat_categories")
+            return touchdown_stats
+        
+        _LOGGER.debug(f"Found {len(td_stat_mappings)} touchdown stat mappings")
         
         # Process each player in the roster
-        last_td_points = -1  # Track highest scoring TD player as proxy for "last"
+        highest_scoring_player = None
+        highest_score = -1
         
         for player in roster:
             if not player.get("stats") or not player.get("is_starting"):
                 continue
                 
+            player_name = player.get("name", "Unknown")
+            player_position = player.get("position", "")
+            player_total_points = player.get("points_total", 0)
+            
             player_tds = {
                 "passing_tds": 0,
-                "rushing_tds": 0,
+                "rushing_tds": 0, 
                 "receiving_tds": 0,
                 "defensive_tds": 0,
                 "return_tds": 0
@@ -848,69 +892,41 @@ class YahooFantasyMatchupSensor(Entity):
             
             player_total_tds = 0
             
-            # Check each stat for touchdown indicators
+            # Process each stat for this player
+            # The stats are in format: {"Stat Name": {"value": "X", "fantasy_points": Y, "display": "X | Y pts"}}
             for stat_name, stat_info in player.get("stats", {}).items():
+                if not isinstance(stat_info, dict):
+                    continue
+                    
+                stat_value_raw = stat_info.get("value", 0)
+                
                 try:
-                    stat_value = float(stat_info.get("value", 0))
+                    stat_value = float(stat_value_raw)
                     if stat_value <= 0:
                         continue
-                        
-                    stat_display = stat_info.get("display", "").lower()
-                    stat_name_lower = stat_name.lower()
-                    
-                    # Try to identify TD type from stat name
-                    td_type = None
-                    
-                    # Check direct mappings first
-                    for potential_td_type, keywords in touchdown_stat_mappings.items():
-                        if any(keyword in stat_name_lower for keyword in keywords):
-                            td_type = potential_td_type
-                            break
-                    
-                    # If not found, check if it's a general TD stat
-                    if not td_type and any(keyword in stat_name_lower for keyword in ["touchdown", "td"]):
-                        # Try to infer type from context
-                        if any(keyword in stat_name_lower for keyword in ["pass", "passing"]):
-                            td_type = "passing_tds"
-                        elif any(keyword in stat_name_lower for keyword in ["rush", "rushing"]):
-                            td_type = "rushing_tds"
-                        elif any(keyword in stat_name_lower for keyword in ["rec", "receiving"]):
-                            td_type = "receiving_tds"
-                        elif any(keyword in stat_name_lower for keyword in ["def", "defensive"]):
-                            td_type = "defensive_tds"
-                        elif any(keyword in stat_name_lower for keyword in ["ret", "return"]):
-                            td_type = "return_tds"
-                        else:
-                            # Generic touchdown - try to infer from player position
-                            player_pos = (player.get("position") or "").upper()
-                            if player_pos in ["QB"]:
-                                td_type = "passing_tds"
-                            elif player_pos in ["RB", "FB"]:
-                                td_type = "rushing_tds"
-                            elif player_pos in ["WR", "TE"]:
-                                td_type = "receiving_tds"
-                            elif player_pos in ["DEF", "D/ST"]:
-                                td_type = "defensive_tds"
-                            else:
-                                td_type = "receiving_tds"  # Default assumption
-                    
-                    if td_type:
-                        td_count = int(stat_value)
-                        player_tds[td_type] += td_count
-                        player_total_tds += td_count
-                        
                 except (ValueError, TypeError):
                     continue
-            
-            # If this player scored touchdowns, add to our tracking
-            if player_total_tds > 0:
-                player_total_points = player.get("points_total", 0)
                 
+                stat_name_lower = stat_name.lower()
+                
+                # Check if this stat maps to a touchdown type
+                td_type = td_stat_mappings.get(stat_name_lower)
+                
+                if td_type:
+                    td_count = int(stat_value)
+                    player_tds[td_type] += td_count
+                    player_total_tds += td_count
+                    
+                    _LOGGER.debug(f"Player {player_name}: Found {td_count} {td_type} from stat '{stat_name}'")
+            
+            # If this player scored touchdowns, track them
+            if player_total_tds > 0:
                 touchdown_stats["touchdown_scorers"].append({
-                    "name": player.get("name"),
-                    "position": player.get("position"),
+                    "name": player_name,
+                    "position": player_position,
                     "touchdowns": player_total_tds,
-                    "td_breakdown": {k: v for k, v in player_tds.items() if v > 0},
+                    "td_breakdown": {k.replace("_tds", "").replace("_", " ").title(): v 
+                                for k, v in player_tds.items() if v > 0},
                     "total_points": player_total_points
                 })
                 
@@ -918,29 +934,41 @@ class YahooFantasyMatchupSensor(Entity):
                 for td_type in player_tds:
                     touchdown_stats[td_type] += player_tds[td_type]
                 
-                # Track "last" scorer (use highest scoring as proxy)
-                if player_total_points > last_td_points:
-                    last_td_points = player_total_points
-                    touchdown_stats["last_td_scorer"] = player.get("name")
-                    
-                    # Determine primary TD type for this player
-                    max_tds = max(player_tds.values())
-                    for td_type, count in player_tds.items():
-                        if count == max_tds:
-                            touchdown_stats["last_td_type"] = td_type.replace("_tds", "").replace("_", " ").title()
-                            break
+                # Track highest scoring TD player as "last scorer"
+                if player_total_points > highest_score:
+                    highest_score = player_total_points
+                    highest_scoring_player = {
+                        "name": player_name,
+                        "tds": player_tds
+                    }
         
-        # Calculate total touchdowns
+        # Set last touchdown scorer info
+        if highest_scoring_player:
+            touchdown_stats["last_td_scorer"] = highest_scoring_player["name"]
+            
+            # Find the TD type with the most touchdowns for this player
+            max_tds = max(highest_scoring_player["tds"].values())
+            for td_type, count in highest_scoring_player["tds"].items():
+                if count == max_tds:
+                    touchdown_stats["last_td_type"] = td_type.replace("_tds", "").replace("_", " ").title()
+                    break
+        
+        # Calculate total
         touchdown_stats["total_touchdowns"] = sum([
             touchdown_stats["passing_tds"],
-            touchdown_stats["rushing_tds"], 
-            touchdown_stats["receiving_tds"],
+            touchdown_stats["rushing_tds"],
+            touchdown_stats["receiving_tds"], 
             touchdown_stats["defensive_tds"],
             touchdown_stats["return_tds"]
         ])
         
         # Sort touchdown scorers by points (highest first)
         touchdown_stats["touchdown_scorers"].sort(key=lambda x: x["total_points"], reverse=True)
+        
+        _LOGGER.info(f"Touchdown summary: Total={touchdown_stats['total_touchdowns']}, "
+                    f"Pass={touchdown_stats['passing_tds']}, Rush={touchdown_stats['rushing_tds']}, "
+                    f"Rec={touchdown_stats['receiving_tds']}, Def={touchdown_stats['defensive_tds']}, "
+                    f"Ret={touchdown_stats['return_tds']}")
         
         return touchdown_stats
 
