@@ -46,48 +46,52 @@ class YahooFantasyMatchupCard extends HTMLElement {
   }
 
   renderFootballField(ourWinProb, oppWinProb, ourTeamName, oppTeamName) {
-    // Calculate ball position (0-100, where 50 is midfield)
-    // ourWinProb of 0.7 means ball at ~70 yard line (opponent's 30)
-    const ballPosition = ourWinProb * 100;
+    // Map win probability to actual field position (yard lines 0-100)
+    const actualYardLine = ourWinProb * 100;
     
-    // Calculate yard line number for the marker
-    const getYardLineNumber = (ourWinProb, oppWinProb) => {
-      // Use the higher probability to determine field position
-      const dominantProb = ourWinProb > oppWinProb ? ourWinProb : oppWinProb;
-      // Convert to yard line (50-100 range for whichever team is winning)
-      return Math.round(50 + (dominantProb - 0.5) * 100);
-    };
+    // Football field: 12 equal sections of 8.33% each
+    // 1 end zone (8.33%) + 10 field sections (83.33%) + 1 end zone (8.33%) = 100%
+    const sectionWidth = 100 / 12; // 8.33% per 10-yard section
+    const endZoneWidth = sectionWidth;
+    const fieldWidth = sectionWidth * 10; // 10 sections for the 100-yard field
     
-    const yardLineNumber = getYardLineNumber(ourWinProb, oppWinProb);
+    // Ball position: end zone (8.33%) + field position based on win probability
+    const ballPosition = endZoneWidth + (actualYardLine / 100) * fieldWidth;
     
-    // Generate proper football field yard markers
+    // Show the win percentage as the yard marker
+    const yardLineNumber = Math.round(ourWinProb * 100);
+    
+    // Generate yard markers at proper 10-yard intervals
     const generateYardMarkers = () => {
       const markers = [];
-      for (let i = 0; i <= 10; i++) {
-        let yardNumber = '';
-        if (i === 0 || i === 10) yardNumber = '';
-        else if (i <= 5) yardNumber = (i * 10).toString();
-        else yardNumber = ((10 - i) * 10).toString();
-        
-        if (yardNumber) {
-          markers.push(`
-            <div class="yard-line" style="left: ${i * 10}%">
-              <span class="yard-marker">${yardNumber}</span>
-            </div>
-          `);
+      for (let i = 1; i <= 9; i++) { // Only show 10, 20, 30, 40, 50, 40, 30, 20, 10
+        let yardNumber;
+        if (i <= 5) {
+          yardNumber = (i * 10).toString();
+        } else {
+          yardNumber = ((10 - i) * 10).toString();
         }
+        
+        // Position at exact 10-yard intervals within the field
+        const markerPosition = endZoneWidth + (i * sectionWidth);
+        markers.push(`
+          <div class="yard-line" style="left: ${markerPosition}%">
+            <span class="yard-marker">${yardNumber}</span>
+          </div>
+        `);
       }
       return markers.join('');
     };
     
-    // Generate hash marks (small tick marks for each yard)
+    // Generate hash marks for each yard (excluding major yard lines and goal lines)
     const generateHashMarks = () => {
       const marks = [];
-      for (let i = 1; i <= 99; i++) {
-        if (i % 10 !== 0) { // Skip major yard lines
+      for (let yard = 1; yard <= 99; yard++) {
+        if (yard % 10 !== 0) { // Skip major yard lines
+          const hashPosition = endZoneWidth + (yard / 100) * fieldWidth;
           marks.push(`
-            <div class="hash-mark-top" style="left: ${i}%; background: rgba(255, 255, 255, 0.5) !important; height: 3px !important; width: 1px !important;"></div>
-            <div class="hash-mark-bottom" style="left: ${i}%; background: rgba(255, 255, 255, 0.5) !important; height: 3px !important; width: 1px !important;"></div>
+            <div class="hash-mark-top" style="left: ${hashPosition}%; background: rgba(255, 255, 255, 0.5) !important; height: 3px !important; width: 1px !important;"></div>
+            <div class="hash-mark-bottom" style="left: ${hashPosition}%; background: rgba(255, 255, 255, 0.5) !important; height: 3px !important; width: 1px !important;"></div>
           `);
         }
       }
@@ -101,20 +105,24 @@ class YahooFantasyMatchupCard extends HTMLElement {
           <div class="field-lines">
             ${generateYardMarkers()}
             ${generateHashMarks()}
-            <div class="midfield-line"></div>
+            <!-- Midfield line at exact center (50% of total width) -->
+            <div class="midfield-line" style="left: 50%"></div>
+            <!-- Goal lines at boundaries between end zones and field -->
+            <div class="goal-line left-goal" style="left: ${endZoneWidth}%"></div>
+            <div class="goal-line right-goal" style="left: ${endZoneWidth + fieldWidth}%"></div>
           </div>
           
-          <!-- End zones -->
-          <div class="endzone left-endzone">
+          <!-- End zones - exactly 8.33% each -->
+          <div class="endzone left-endzone" style="width: ${endZoneWidth}%; left: 0">
             <span class="endzone-text">YOU</span>
           </div>
-          <div class="endzone right-endzone">
+          <div class="endzone right-endzone" style="width: ${endZoneWidth}%; right: 0">
             <span class="endzone-text">OPPONENT</span>
           </div>
           
           <!-- First down marker -->
           <div class="first-down-marker" style="left: ${ballPosition}%">
-            <div class="yard-indicator">${yardLineNumber}</div>
+            <div class="yard-indicator">${yardLineNumber}%</div>
           </div>
           
           <!-- Football/ball position -->
@@ -122,16 +130,16 @@ class YahooFantasyMatchupCard extends HTMLElement {
             🏈
           </div>
           
-          <!-- Win probability bars -->
-          <div class="win-prob-bar left-bar" style="width: ${oppWinProb * 50}%">
+          <!-- Win probability bars - only extend across playing field -->
+          <div class="win-prob-bar left-bar" style="left: ${endZoneWidth}%; width: ${Math.max(0, (50 - actualYardLine) * fieldWidth / 100)}%">
           </div>
-          <div class="win-prob-bar right-bar" style="width: ${ourWinProb * 50}%">
+          <div class="win-prob-bar right-bar" style="right: ${endZoneWidth}%; width: ${Math.max(0, (actualYardLine - 50) * fieldWidth / 100)}%">
           </div>
         </div>
         <div class="field-legend">
           <div class="legend-item">
             <span class="legend-team left">${ourTeamName}</span>
-            <span class="legend-vs">Field Position</span>
+            <span class="legend-vs">Win Probability</span>
             <span class="legend-team right">${oppTeamName}</span>
           </div>
         </div>
@@ -688,30 +696,32 @@ class YahooFantasyMatchupCard extends HTMLElement {
         
         /* Football Field Styles */
         .football-field-container {
-          margin: 16px 8px;
-          padding: 16px;
+          margin: 20px 12px;
+          padding: 20px;
           background: linear-gradient(to bottom, #2d5a2d, #4a7c59);
           border-radius: 8px;
           box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
         }
         .football-field {
           position: relative;
-          height: 80px;
+          height: 100px;
           background: linear-gradient(90deg, 
-            #8B4513 0%, #8B4513 5%,
-            #2d5a2d 5%, #2d5a2d 95%,
-            #8B4513 95%, #8B4513 100%);
+            #8B4513 0%, #8B4513 8.33%,
+            #2d5a2d 8.33%, #2d5a2d 91.67%,
+            #8B4513 91.67%, #8B4513 100%);
           border-radius: 4px;
           overflow: visible;
-          margin-bottom: 20px;
+          margin-bottom: 24px;
         }
+
         .field-lines {
           position: absolute;
           top: 0;
-          left: 5%;
-          right: 5%;
+          left: 0;
+          right: 0;
           height: 100%;
         }
+
         .yard-line {
           position: absolute;
           top: 0;
@@ -719,33 +729,40 @@ class YahooFantasyMatchupCard extends HTMLElement {
           width: 1px;
           background: rgba(255, 255, 255, 0.6);
         }
-        .yard-line:nth-child(6) {
-          width: 2px;
-          background: rgba(255, 255, 255, 0.9);
-        }
+
         .yard-marker {
           position: absolute;
           top: 50%;
-          left: -8px;
+          left: -10px;
           transform: translateY(-50%);
-          font-size: 8px;
+          font-size: 10px;
           color: white;
           font-weight: bold;
           text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
         }
+
         .midfield-line {
           position: absolute;
-          left: 50%;
           top: 0;
           height: 100%;
           width: 2px;
           background: rgba(255, 255, 255, 0.9);
           transform: translateX(-50%);
         }
+
+        .goal-line {
+          position: absolute;
+          top: 0;
+          height: 100%;
+          width: 2px;
+          background: rgba(255, 255, 255, 0.9);
+          transform: translateX(-50%);
+          z-index: 10;
+        }
+
         .endzone {
           position: absolute;
           top: 0;
-          width: 5%;
           height: 100%;
           display: flex;
           align-items: center;
@@ -757,11 +774,11 @@ class YahooFantasyMatchupCard extends HTMLElement {
         }
         .left-endzone {
           left: 0;
-          background: linear-gradient(90deg, #8B4513, rgba(139, 69, 19, 0.8));
+          background: #8B4513;
         }
         .right-endzone {
           right: 0;
-          background: linear-gradient(270deg, #8B4513, rgba(139, 69, 19, 0.8));
+          background: #8B4513;
         }
         .endzone-text {
           writing-mode: vertical-rl;
@@ -771,7 +788,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           position: absolute;
           top: 50%;
           transform: translateX(-50%) translateY(-50%);
-          font-size: 16px;
+          font-size: 20px;
           z-index: 12;
           filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
           animation: footballBob 2s ease-in-out infinite;
@@ -780,7 +797,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
           position: absolute;
           top: 0;
           height: 100%;
-          width: 4px;
+          width: 5px;
           background: linear-gradient(to bottom, #FFD700, #FFA500);
           transform: translateX(-50%);
           z-index: 11;
@@ -789,14 +806,14 @@ class YahooFantasyMatchupCard extends HTMLElement {
         }
         .yard-indicator {
           position: absolute;
-          bottom: -18px;
+          bottom: -22px;
           left: 50%;
           transform: translateX(-50%);
           background: rgba(0, 0, 0, 0.9);
           color: #FFD700;
-          font-size: 9px;
+          font-size: 11px;
           font-weight: bold;
-          padding: 2px 6px;
+          padding: 3px 8px;
           border-radius: 4px;
           white-space: nowrap;
           font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
@@ -832,11 +849,11 @@ class YahooFantasyMatchupCard extends HTMLElement {
           transition: width 0.8s ease;
         }
         .left-bar {
-          left: 5%;
+          left: 8.33%;
           border-radius: 0 4px 4px 0;
         }
         .right-bar {
-          right: 5%;
+          right: 8.33%;
           border-radius: 4px 0 0 4px;
         }
 
