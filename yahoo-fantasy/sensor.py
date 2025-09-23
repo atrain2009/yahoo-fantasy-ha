@@ -216,6 +216,9 @@ class YahooFantasyMatchupSensor(Entity):
         self._consecutive_401_errors = 0
         self._debug_mode = debug_mode  # New debug mode flag
 
+        self._previous_td_counts = {}  # Store {team_id: {player_id: td_count}} from last update
+        self._last_td_scorers = {}     # Store {team_id: {"name": "Player", "type": "Rushing", "timestamp": time}}
+
     @property
     def name(self):
         return "Yahoo Fantasy Matchup"
@@ -1122,6 +1125,12 @@ class YahooFantasyMatchupSensor(Entity):
                 else:
                     opponent_team = team
 
+            if self._debug_mode:
+                self._attributes["debug_matchup_teams"] = matchup_data.get("teams", [])
+            else:
+                # Store minimal team data needed for opponent team_id lookup
+                self._attributes["_matchup_teams"] = [{"team_id": team.get("team_id")} for team in matchup_data.get("teams", [])]
+
             if not our_team:
                 self._state = "error"
                 self._attributes.update({
@@ -1948,6 +1957,377 @@ class YahooFantasyMatchupSensor(Entity):
         except Exception as e:
             _LOGGER.warning(f"Error extracting win probability: {e}")
             return None
+
+    def _get_player_touchdown_count(self, player):
+        """Get total touchdown count for a player from their stats."""
+        if not player.get("stats"):
+            return 0
+            
+        td_count = 0
+        for stat_name, stat_info in player.get("stats", {}).items():
+            if not isinstance(stat_info, dict):
+                continue
+                
+            # Look for touchdown-related stats
+            stat_name_lower = stat_name.lower()
+            if "touchdown" in stat_name_lower:
+                try:
+                    value = float(stat_info.get("value", 0))
+                    td_count += int(value)
+                except (ValueError, TypeError):
+                    continue
+                    
+        return td_count
+
+    def _detect_new_touchdown_scorer(self, current_roster, team_id):
+        """Detect which player scored the most recent touchdown by comparing counts."""
+        if not current_roster:
+            return None
+            
+        team_id_str = str(team_id)
+        new_scorer = None
+        most_recent_timestamp = 0
+        
+        # Get previous counts for this team
+        previous_counts = self._previous_td_counts.get(team_id_str, {})
+        current_counts = {}
+        
+        for player in current_roster:
+            if not player.get("is_starting") or not player.get("player_id"):
+                continue
+                
+            player_id = str(player["player_id"])
+            current_tds = self._get_player_touchdown_count(player)
+            current_counts[player_id] = current_tds
+            
+            previous_tds = previous_counts.get(player_id, 0)
+            
+            # If this player's TD count increased, they scored recently
+            if current_tds > previous_tds:
+                # Determine the type of touchdown they scored
+                td_type = self._determine_player_td_type(player)
+                
+                scorer_info = {
+                    "name": player["name"],
+                    "position": player.get("position", ""),
+                    "tds_added": current_tds - previous_tds,
+                    "total_tds": current_tds,
+                    "td_type": td_type,
+                    "timestamp": time.time(),  # Current time as best approximation
+                    "points": player.get("points_total", 0)
+                }
+                
+                # Use the highest scoring new TD player as most recent
+                # (This is an approximation since we don't have exact timing)
+                if not new_scorer or scorer_info["points"] > new_scorer["points"]:
+                    new_scorer = scorer_info
+        
+        # Update stored counts for this team
+        self._previous_td_counts[team_id_str] = current_counts
+        
+        # Update last scorer info if we found a new one
+        if new_scorer:
+            self._last_td_scorers[team_id_str] = {
+                "name": new_scorer["name"],
+                "type": new_scorer["td_type"],
+                "timestamp": new_scorer["timestamp"],
+                "tds_added": new_scorer["tds_added"]
+            }
+            
+            _LOGGER.info(f"New TD scorer detected for team {team_id}: {new_scorer['name']} ({new_scorer['td_type']})")
+        
+        return new_scorer
+
+    def _determine_player_td_type(self, player):
+        """Determine what type of touchdown a player scored based on their stats."""
+        if not player.get("stats"):
+            return "Unknown"
+            
+        # Look through their stats to find which TD type increased
+        td_types_found = []
+        
+        for stat_name, stat_info in player.get("stats", {}).items():
+            if not isinstance(stat_info, dict):
+                continue
+                
+            stat_name_lower = stat_name.lower()
+            value = stat_info.get("value", 0)
+            
+            try:
+                if float(value) > 0 and "touchdown" in stat_name_lower:
+                    if any(word in stat_name_lower for word in ["pass", "passing"]):
+                        td_types_found.append("Passing")
+                    elif any(word in stat_name_lower for word in ["rush", "rushing"]):
+                        td_types_found.append("Rushing")
+                    elif any(word in stat_name_lower for word in ["rec", "receiving"]):
+                        td_types_found.append("Receiving")
+                    elif any(word in stat_name_lower for word in ["def", "defensive"]):
+                        td_types_found.append("Defensive")
+                    elif any(word in stat_name_lower for word in ["ret", "return"]):
+                        td_types_found.append("Return")
+                    else:
+                        td_types_found.append("Touchdown")
+            except (ValueError, TypeError):
+                continue
+        
+        # Return the most specific type found, or the first one
+        if td_types_found:
+            return td_types_found[0]
+        else:
+            # Fallback: guess based on player position
+            position = player.get("position", "").upper()
+            if position in ["QB"]:
+                return "Passing"
+            elif position in ["RB"]:
+                return "Rushing" 
+            elif position in ["WR", "TE"]:
+                return "Receiving"
+            elif position in ["DEF", "D/ST"]:
+                return "Defensive"
+            else:
+                return "Touchdown"
+
+    def _get_touchdown_stats(self, roster, stat_categories, team_id=None):
+        """Enhanced touchdown tracking with new scorer detection."""
+        touchdown_stats = {
+            "total_touchdowns": 0,
+            "passing_tds": 0,
+            "rushing_tds": 0,
+            "receiving_tds": 0,
+            "defensive_tds": 0,
+            "return_tds": 0,
+            "last_td_scorer": None,
+            "last_td_type": None,
+            "new_td_scorer": None,  # New: player who just scored
+            "touchdown_scorers": []
+        }
+        
+        if not roster or not stat_categories:
+            _LOGGER.debug("No roster or stat_categories provided for touchdown tracking")
+            return touchdown_stats
+        
+        # Detect new touchdown scorer BEFORE processing stats
+        if team_id:
+            new_scorer = self._detect_new_touchdown_scorer(roster, team_id)
+            if new_scorer:
+                touchdown_stats["new_td_scorer"] = new_scorer
+                touchdown_stats["last_td_scorer"] = new_scorer["name"]
+                touchdown_stats["last_td_type"] = new_scorer["td_type"]
+        
+        # Build mapping of stat names to touchdown types (your existing code)
+        td_stat_mappings = {}
+        
+        for stat_id, stat_info in stat_categories.items():
+            stat_name = (stat_info.get("name") or "").lower()
+            stat_display = (stat_info.get("display_name") or "").lower() 
+            stat_abbr = (stat_info.get("abbr") or "").lower()
+            
+            # Skip bonus/modifier touchdown stats
+            exclusion_keywords = [
+                "40+ yard", "40+", "50+ yard", "50+", "yard", 
+                "long", "bonus", "2 pt", "2pt", "conversion",
+                "40-49", "50+", "1-9", "10-19", "20-29", "30-39"
+            ]
+            
+            if any(keyword in stat_name for keyword in exclusion_keywords):
+                continue
+            
+            td_type = None
+            
+            # Map touchdown types (your existing logic)
+            if stat_name in ["passing touchdowns", "pass td", "passing_touchdowns"]:
+                td_type = "passing_tds"
+            elif stat_name in ["rushing touchdowns", "rush td", "rushing_touchdowns"]:
+                td_type = "rushing_tds"
+            elif stat_name in ["receiving touchdowns", "rec td", "receiving_touchdowns"]:
+                td_type = "receiving_tds"
+            elif stat_name in ["defensive touchdowns", "def td", "defensive_touchdowns"]:
+                td_type = "defensive_tds"
+            elif stat_name in ["return touchdowns", "ret td", "return_touchdowns"]:
+                td_type = "return_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["pass", "passing"]):
+                td_type = "passing_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["rush", "rushing"]):
+                td_type = "rushing_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["rec", "receiving"]):
+                td_type = "receiving_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["def", "defensive"]):
+                td_type = "defensive_tds"
+            elif "touchdown" in stat_name and any(word in stat_name for word in ["ret", "return"]):
+                td_type = "return_tds"
+            
+            if td_type:
+                td_stat_mappings[stat_name] = td_type
+                td_stat_mappings[stat_display] = td_type
+                if stat_abbr:
+                    td_stat_mappings[stat_abbr] = td_type
+                td_stat_mappings[f"stat_{stat_id}"] = td_type
+        
+        # Process each player to get TD totals (your existing logic)
+        highest_scoring_player = None
+        highest_score = -1
+        
+        for player in roster:
+            if not player.get("stats") or not player.get("is_starting"):
+                continue
+                
+            player_name = player.get("name", "Unknown")
+            player_position = player.get("position", "")
+            player_total_points = player.get("points_total", 0)
+            
+            player_tds = {
+                "passing_tds": 0,
+                "rushing_tds": 0, 
+                "receiving_tds": 0,
+                "defensive_tds": 0,
+                "return_tds": 0
+            }
+            
+            player_total_tds = 0
+            
+            # Process stats
+            for stat_name, stat_info in player.get("stats", {}).items():
+                if not isinstance(stat_info, dict):
+                    continue
+                    
+                stat_value_raw = stat_info.get("value", 0)
+                
+                try:
+                    stat_value = float(stat_value_raw)
+                    if stat_value <= 0:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                stat_name_lower = stat_name.lower()
+                td_type = td_stat_mappings.get(stat_name_lower)
+                
+                if td_type:
+                    td_count = int(stat_value)
+                    player_tds[td_type] += td_count
+                    player_total_tds += td_count
+            
+            if player_total_tds > 0:
+                touchdown_stats["touchdown_scorers"].append({
+                    "name": player_name,
+                    "position": player_position,
+                    "touchdowns": player_total_tds,
+                    "td_breakdown": {k.replace("_tds", "").replace("_", " ").title(): v 
+                                for k, v in player_tds.items() if v > 0},
+                    "total_points": player_total_points
+                })
+                
+                # Update team totals
+                for td_type in player_tds:
+                    touchdown_stats[td_type] += player_tds[td_type]
+                
+                # Track highest scoring player as fallback for "last scorer"
+                if player_total_points > highest_score:
+                    highest_score = player_total_points
+                    highest_scoring_player = {
+                        "name": player_name,
+                        "tds": player_tds
+                    }
+        
+        # Use fallback logic if no new scorer was detected
+        if not touchdown_stats["last_td_scorer"] and highest_scoring_player:
+            touchdown_stats["last_td_scorer"] = highest_scoring_player["name"]
+            
+            # Find the TD type with the most touchdowns for this player
+            max_tds = max(highest_scoring_player["tds"].values())
+            for td_type, count in highest_scoring_player["tds"].items():
+                if count == max_tds:
+                    touchdown_stats["last_td_type"] = td_type.replace("_tds", "").replace("_", " ").title()
+                    break
+        
+        # Calculate total
+        touchdown_stats["total_touchdowns"] = sum([
+            touchdown_stats["passing_tds"],
+            touchdown_stats["rushing_tds"],
+            touchdown_stats["receiving_tds"], 
+            touchdown_stats["defensive_tds"],
+            touchdown_stats["return_tds"]
+        ])
+        
+        # Sort touchdown scorers by points
+        touchdown_stats["touchdown_scorers"].sort(key=lambda x: x["total_points"], reverse=True)
+        
+        return touchdown_stats
+
+    def _add_touchdown_attributes(self, attributes, our_roster, opponent_roster, stat_categories):
+        """Add touchdown aggregation attributes for both teams with new scorer detection."""
+        try:
+            # Get touchdown stats for our team (pass team_id for new scorer detection)
+            our_td_stats = self._get_touchdown_stats(our_roster, stat_categories, self._team_id)
+            
+            # Add our team's touchdown attributes
+            attributes.update({
+                "our_total_touchdowns": our_td_stats["total_touchdowns"],
+                "our_passing_tds": our_td_stats["passing_tds"],
+                "our_rushing_tds": our_td_stats["rushing_tds"],
+                "our_receiving_tds": our_td_stats["receiving_tds"],
+                "our_defensive_tds": our_td_stats["defensive_tds"],
+                "our_return_tds": our_td_stats["return_tds"],
+                "our_last_td_scorer": our_td_stats["last_td_scorer"],
+                "our_last_td_type": our_td_stats["last_td_type"],
+                "our_new_td_scorer": our_td_stats.get("new_td_scorer"),  # New attribute
+                "our_touchdown_scorers": our_td_stats["touchdown_scorers"]
+            })
+            
+            # Get touchdown stats for opponent team
+            if opponent_roster:
+                # Try to get opponent team_id from the matchup data
+                opponent_team_id = None
+                for team in attributes.get("debug_matchup_teams", []):
+                    if str(team.get("team_id")) != str(self._team_id):
+                        opponent_team_id = team.get("team_id")
+                        break
+                
+                # If we couldn't find it from matchup data, generate a placeholder
+                if not opponent_team_id:
+                    opponent_team_id = f"opponent_{self._team_id}"
+                
+                opp_td_stats = self._get_touchdown_stats(opponent_roster, stat_categories, opponent_team_id)
+                
+                # Add opponent's touchdown attributes
+                attributes.update({
+                    "opponent_total_touchdowns": opp_td_stats["total_touchdowns"],
+                    "opponent_passing_tds": opp_td_stats["passing_tds"],
+                    "opponent_rushing_tds": opp_td_stats["rushing_tds"],
+                    "opponent_receiving_tds": opp_td_stats["receiving_tds"],
+                    "opponent_defensive_tds": opp_td_stats["defensive_tds"],
+                    "opponent_return_tds": opp_td_stats["return_tds"],
+                    "opponent_last_td_scorer": opp_td_stats["last_td_scorer"],
+                    "opponent_last_td_type": opp_td_stats["last_td_type"],
+                    "opponent_new_td_scorer": opp_td_stats.get("new_td_scorer"),  # New attribute
+                    "opponent_touchdown_scorers": opp_td_stats["touchdown_scorers"]
+                })
+            else:
+                # Add null values for opponent if no opponent roster
+                attributes.update({
+                    "opponent_total_touchdowns": 0,
+                    "opponent_passing_tds": 0,
+                    "opponent_rushing_tds": 0,
+                    "opponent_receiving_tds": 0,
+                    "opponent_defensive_tds": 0,
+                    "opponent_return_tds": 0,
+                    "opponent_last_td_scorer": None,
+                    "opponent_last_td_type": None,
+                    "opponent_new_td_scorer": None,
+                    "opponent_touchdown_scorers": []
+                })
+                
+        except Exception as e:
+            _LOGGER.error(f"Error adding touchdown attributes: {e}")
+            # Add safe defaults on error
+            attributes.update({
+                "our_total_touchdowns": 0,
+                "our_last_td_scorer": None,
+                "our_new_td_scorer": None,
+                "opponent_total_touchdowns": 0, 
+                "opponent_last_td_scorer": None,
+                "opponent_new_td_scorer": None
+            })
 
     def _find_matchup_data(self, scoreboard_data):
         """Find the matchup containing our team."""
