@@ -106,7 +106,7 @@ class YahooFantasyMatchupCard extends HTMLElement {
             ${generateYardMarkers()}
             ${generateHashMarks()}
             <!-- Midfield line at exact center (50% of total width) -->
-            <div class="midfield-line" style="left: 50%"></div>
+            <!-- <div class="midfield-line" style="left: 50%"></div> -->
             <!-- Goal lines at boundaries between end zones and field -->
             <div class="goal-line left-goal" style="left: ${endZoneWidth}%"></div>
             <div class="goal-line right-goal" style="left: ${endZoneWidth + fieldWidth}%"></div>
@@ -122,6 +122,10 @@ class YahooFantasyMatchupCard extends HTMLElement {
           
           <!-- First down marker -->
           <div class="first-down-marker" style="left: ${ballPosition}%">
+            <div class="first-down-flag">
+              <div class="first-down-disc"></div>
+              <div class="first-down-pennant"></div>
+            </div>
             <div class="yard-indicator">${yardLineNumber}%</div>
           </div>
           
@@ -797,24 +801,72 @@ class YahooFantasyMatchupCard extends HTMLElement {
           position: absolute;
           top: 0;
           height: 100%;
-          width: 5px;
+          width: 3px;
           background: linear-gradient(to bottom, #FFD700, #FFA500);
           transform: translateX(-50%);
           z-index: 11;
           border-radius: 2px;
           box-shadow: 0 0 4px rgba(255, 215, 0, 0.6);
         }
+        .first-down-flag {
+          position: absolute;
+          top: -27px;
+          left: 50%;
+          transform: translateX(-50%);
+          z-index: 12;
+        }
+        .first-down-disc {
+          width: 10px;
+          height: 10px;
+          background: #FF4500;
+          border-radius: 50%;
+          position: relative;
+          margin: 0 auto;
+          border: 1px solid #333;
+        }
+        .first-down-disc::before {
+          content: '';
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 6px;
+          height: 6px;
+          border: 1px solid #000;
+          border-radius: 50%;
+          background: transparent;
+        }
+        .first-down-disc::after {
+          content: '';
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 2px;
+          height: 2px;
+          background: #000;
+          border-radius: 50%;
+        }
+        .first-down-pennant {
+          width: 0;
+          height: 0;
+          border-left: 3px solid transparent;
+          border-right: 3px solid transparent;
+          border-top: 16px solid #FF4500;
+          position: relative;
+          margin: 0 auto;
+        }
         .yard-indicator {
           position: absolute;
-          bottom: -22px;
+          bottom: -20px;
           left: 50%;
           transform: translateX(-50%);
           background: rgba(0, 0, 0, 0.9);
           color: #FFD700;
-          font-size: 11px;
+          font-size: 9px;
           font-weight: bold;
-          padding: 3px 8px;
-          border-radius: 4px;
+          padding: 2px 4px;
+          border-radius: 3px;
           white-space: nowrap;
           font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', monospace;
           border: 1px solid #FFD700;
